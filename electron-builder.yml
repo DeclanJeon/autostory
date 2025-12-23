@@ -1,0 +1,48 @@
+appId: com.autotistory.aiwriter
+productName: AutoStory
+directories:
+  output: dist_electron
+  buildResources: build
+files:
+  - dist/main/main/**/*
+  - dist/**/*
+  - package.json
+  - node_modules/**/*
+# 네이티브 모듈 분리 (Linux/Win/Mac 공통 이슈 방지)
+asarUnpack:
+  - "node_modules/@napi-rs/canvas"
+  - "node_modules/playwright-core"
+  - "resources/**"
+
+disableSanityCheckAsar: true
+extends: null
+
+# === Windows (GitHub Actions windows-latest에서 빌드됨) ===
+win:
+  target:
+    - nsis
+  icon: build/icon.ico
+  artifactName: "${productName}-Setup-${version}.${ext}"
+
+# === Linux (GitHub Actions ubuntu-latest에서 빌드됨) ===
+linux:
+  target:
+    - AppImage
+    - deb
+    - rpm
+  icon: build/icons
+  category: Utility
+  maintainer: "AutoStory Team <contact@example.com>"
+  artifactName: "${productName}-${version}-linux.${ext}"
+
+# === macOS (GitHub Actions macos-latest에서 빌드됨) ===
+mac:
+  target: dmg
+  icon: build/icon.icns
+  identity: null # 코드 서명 건너뛰기 (개발자 계정 없을 시 필수)
+  artifactName: "${productName}-${version}-mac.${ext}"
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true

@@ -1,0 +1,5 @@
+{
+  "name": "AutoTistory AI Writer",
+  "description": "An automated blog post generator and publisher dashboard for Tistory using Gemini API. Features simulated browser automation, RSS feed analysis, and markdown generation.",
+  "requestFramePermissions": []
+}
