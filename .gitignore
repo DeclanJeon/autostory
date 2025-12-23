@@ -48,7 +48,7 @@ $RECYCLE.BIN/
 *.lnk
 
 # Package managers
-pnpm-lock.yaml
+# pnpm-lock.yaml 제거됨 - CI/CD 빌드에 필수적이므로 추적 유지 필요
 package-lock.json
 
 # Windsurf
@@ -139,4 +139,3 @@ docs
 
 .kilocode
 .cline
-scripts/
