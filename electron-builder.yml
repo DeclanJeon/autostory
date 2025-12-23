@@ -51,3 +51,9 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
+
+# GitHub Release로 publish 설정
+publish:
+  provider: github
+  owner: DeclanJeon
+  repo: autostory
