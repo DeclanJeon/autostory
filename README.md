@@ -105,8 +105,8 @@ AutoTistory AI Writer는 AI 기술을 활용하여 티스토리 블로그 콘텐
 1. **저장소 클론**
 
    ```bash
-   git clone https://github.com/Declan-User/autotistory-ai-writer.git
-   cd autotistory-ai-writer
+   git clone https://github.com/Declan-User/autostory-ai-writer.git
+   cd autostory-ai-writer
    ```
 
 2. **의존성 설치**
@@ -284,8 +284,8 @@ src/
 1. **Fork 및 클론**
 
    ```bash
-   git clone https://github.com/YOUR_USERNAME/autotistory-ai-writer.git
-   cd autotistory-ai-writer
+   git clone https://github.com/YOUR_USERNAME/autostory-ai-writer.git
+   cd autostory-ai-writer
    ```
 
 2. **의존성 설치**
@@ -340,9 +340,9 @@ src/
 
 ## 🆘 지원 및 문의
 
-- **이슈 보고**: [GitHub Issues](https://github.com/Declan-User/autotistory-ai-writer/issues)
-- **기능 요청**: [GitHub Discussions](https://github.com/Declan-User/autotistory-ai-writer/discussions)
-- **문의사항**: [이메일](mailto:autotistory@example.com)
+- **이슈 보고**: [GitHub Issues](https://github.com/Declan-User/autostory/issues)
+- **기능 요청**: [GitHub Discussions](https://github.com/Declan-User/autostory/discussions)
+- **문의사항**: [이메일](mailto:ponslink@gmail.com)
 
 ## 🔄 변경 로그
 

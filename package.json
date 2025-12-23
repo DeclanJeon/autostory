@@ -1,11 +1,11 @@
 {
-  "name": "autotistory-ai-writer",
+  "name": "autostory-ai-writer",
   "private": true,
   "version": "1.0.0",
   "description": "AI-powered Tistory content creation and automation tool",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Declan-User/autotistory-ai-writer.git"
+    "url": "https://github.com/Declan-User/autostory.git"
   },
   "author": "AutoStory Team",
   "main": "./dist/main/main/main.js",

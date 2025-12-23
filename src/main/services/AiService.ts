@@ -714,8 +714,8 @@ ${chunk}
             headers: {
               Authorization: `Bearer ${settings.openrouterApiKey}`,
               "Content-Type": "application/json",
-              "HTTP-Referer": "https://autotistory-ai-writer.local",
-              "X-Title": "AutoTistory AI Writer",
+              "HTTP-Referer": "https://autostory-ai-writer.local",
+              "X-Title": "AutoStory AI Writer",
             },
             body: JSON.stringify({
               model: settings.aiModel || "xiaomi/mimo-v2-flash:free",
@@ -881,8 +881,8 @@ ${chunk}
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": "https://autotistory-ai-writer.local",
-          "X-Title": "AutoTistory AI Writer",
+          "HTTP-Referer": "https://autostory-ai-writer.local",
+          "X-Title": "AutoStory AI Writer",
         },
       });
 
@@ -1281,8 +1281,8 @@ ${contextText}
             headers: {
               Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",
-              "HTTP-Referer": "https://autotistory-ai-writer.local",
-              "X-Title": "AutoTistory AI Writer",
+              "HTTP-Referer": "https://autostory-ai-writer.local",
+              "X-Title": "AutoStory AI Writer",
             },
             body: JSON.stringify({
               model: modelName,
@@ -1606,8 +1606,8 @@ ${prompt}
             headers: {
               Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",
-              "HTTP-Referer": "https://autotistory-ai-writer.local",
-              "X-Title": "AutoTistory AI Writer",
+              "HTTP-Referer": "https://autostory-ai-writer.local",
+              "X-Title": "AutoStory AI Writer",
             },
             body: JSON.stringify({
               model: modelName,
@@ -1660,8 +1660,8 @@ ${prompt}
           headers: {
             Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://autotistory-ai-writer.local",
-            "X-Title": "AutoTistory AI Writer",
+            "HTTP-Referer": "https://autostory-ai-writer.local",
+            "X-Title": "AutoStory AI Writer",
           },
           body: JSON.stringify({
             model: fallbackModel,

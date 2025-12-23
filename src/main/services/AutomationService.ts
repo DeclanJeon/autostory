@@ -1648,8 +1648,8 @@ ${categories.map((cat, index) => `${index + 1}. ${cat}`).join("\n")}
             headers: {
               Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",
-              "HTTP-Referer": "https://autotistory-ai-writer.local",
-              "X-Title": "AutoTistory AI Writer",
+              "HTTP-Referer": "https://autostory-ai-writer.local",
+              "X-Title": "AutoStory AI Writer",
             },
             body: JSON.stringify({
               model: modelName,
@@ -1746,8 +1746,8 @@ ${themes.map((theme, index) => `${index + 1}. ${theme}`).join("\n")}
             headers: {
               Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",
-              "HTTP-Referer": "https://autotistory-ai-writer.local",
-              "X-Title": "AutoTistory AI Writer",
+              "HTTP-Referer": "https://autostory-ai-writer.local",
+              "X-Title": "AutoStory AI Writer",
             },
             body: JSON.stringify({
               model: modelName,

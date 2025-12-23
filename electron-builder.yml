@@ -1,4 +1,4 @@
-appId: com.autotistory.aiwriter
+appId: com.autostory.aiwriter
 productName: AutoStory
 directories:
   output: dist_electron
