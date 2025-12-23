@@ -535,25 +535,20 @@ const Settings: React.FC = () => {
             type="text"
             className="w-full border p-2 rounded text-slate-800"
             value={formData.blogName}
-            onChange={(e) =>
-              setFormData({ ...formData, blogName: e.target.value })
-            }
+            onChange={(e) => {
+              const name = e.target.value;
+              setFormData({
+                ...formData,
+                blogName: name,
+                writeRedirectUrl: `https://${name}.tistory.com/manage/newpost/?type=post&returnURL=%2Fmanage%2Fposts%2F`,
+              });
+            }}
+            placeholder="티스토리 블로그 이름 (예: myblog)"
           />
         </div>
 
-        <div>
-          <label className="block font-medium mb-1">
-            글쓰기 리다이렉트 URL
-          </label>
-          <input
-            type="text"
-            className="w-full border p-2 rounded text-sm text-gray-600"
-            value={formData.writeRedirectUrl}
-            onChange={(e) =>
-              setFormData({ ...formData, writeRedirectUrl: e.target.value })
-            }
-          />
-        </div>
+        {/* 글쓰기 리다이렉트 URL (자동 관리되므로 숨김 처리) */}
+        <input type="hidden" value={formData.writeRedirectUrl} />
 
         {/* AI 프로바이더 선택 */}
         <div>

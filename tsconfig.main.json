@@ -4,7 +4,7 @@
     "module": "commonjs",
     "target": "ES2022",
     "outDir": "dist/main",
-    "rootDir": "src",
+    "rootDir": "src/main",
     "skipLibCheck": true,
     "moduleResolution": "node",
     "esModuleInterop": true,

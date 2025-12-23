@@ -4,6 +4,14 @@ import { registerHandlers } from "./ipc/handlers";
 import store from "./config/store";
 import { ollamaInstaller } from "./utils/ollamaInstaller";
 
+// Linux Sandbox 관련 명령줄 인자 처리
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("no-sandbox");
+  app.commandLine.appendSwitch("disable-setuid-sandbox");
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-software-rasterizer"); // 간혹 도움됨
+}
+
 let mainWindow: BrowserWindow | null = null;
 
 const createWindow = async () => {
@@ -74,6 +82,8 @@ const createWindow = async () => {
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
+    // [수정됨] dist/main/main.js 기준 -> ../renderer/index.html
+    // vite.config.ts에서 outDir: 'dist/renderer'로 설정했으므로 이 경로가 맞습니다.
     mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
   }
 

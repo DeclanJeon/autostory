@@ -1047,7 +1047,7 @@ const store = new Store<UserSchema>({
     settings: {
       blogName: "",
       writeRedirectUrl:
-        "https://acstory.tistory.com/manage/newpost/?type=post&returnURL=%2Fmanage%2Fposts%2F",
+        "https://blogName.tistory.com/manage/newpost/?type=post&returnURL=%2Fmanage%2Fposts%2F",
       aiApiKey: "",
       aiProvider: "gemini",
       aiModel: "gemini-2.5-flash",

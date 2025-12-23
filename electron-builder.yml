@@ -3,9 +3,13 @@ productName: AutoStory
 directories:
   output: dist_electron
   buildResources: build
+
+# [추가됨] 빌드 후 압축하기 전에 실행할 스크립트 지정
+afterPack: "scripts/afterPack.js"
+
 files:
-  - dist/main/main/**/*
-  - dist/**/*
+  - from: dist
+    to: dist
   - package.json
   - node_modules/**/*
 # 네이티브 모듈 분리 (Linux/Win/Mac 공통 이슈 방지)
@@ -33,6 +37,8 @@ linux:
   category: Utility
   maintainer: "AutoStory Team <contact@example.com>"
   artifactName: "${productName}-${version}-linux.${ext}"
+  # [삭제] chrome-sandbox 파일 제외 구문은 이제 필요 없음
+  # afterPack 스크립트에서 직접 파일을 제거합니다
 
 # === macOS (GitHub Actions macos-latest에서 빌드됨) ===
 mac:

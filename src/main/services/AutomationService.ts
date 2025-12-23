@@ -136,27 +136,36 @@ export class AutomationService {
     sendLogToRenderer(this.mainWindow, "브라우저(Playwright) 초기화 중...");
 
     try {
+      // 1순위: 시스템 Chrome 시도
+      logger.info("시스템 Chrome 실행 시도...");
       this.browser = await chromium.launch({
         headless: false,
-        args: ["--start-maximized"],
-        channel: "chrome",
+        args: ["--start-maximized", "--no-sandbox", "--disable-setuid-sandbox"],
+        channel: "chrome", // 시스템에 설치된 Chrome 사용
       });
     } catch (e: any) {
-      logger.error(`크롬 실행 실패: ${e.message}`);
-      sendLogToRenderer(
-        this.mainWindow,
-        "시스템 Chrome 실행 실패. 내장 Chromium 사용."
-      );
+      logger.warn(`Chrome 실행 실패: ${e.message}. Chromium 시도.`);
 
       try {
+        // 2순위: 번들링된 Chromium 시도 (하지만 배포판엔 없을 확률 높음)
+        // 리눅스의 경우 별도 설치가 필요할 수 있음
         this.browser = await chromium.launch({
           headless: false,
-          args: ["--start-maximized"],
+          args: [
+            "--start-maximized",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+          ],
         });
       } catch (retryError: any) {
-        throw new Error(
-          '브라우저 실행 실패. "npx playwright install" 후 Chrome 설치.'
-        );
+        const errorMsg =
+          process.platform === "linux"
+            ? '브라우저를 찾을 수 없습니다. Chrome이 설치되어 있는지 확인하거나 "npx playwright install chromium"을 실행하세요.'
+            : "Google Chrome 브라우저가 설치되어 있어야 합니다.";
+
+        logger.error(errorMsg);
+        sendLogToRenderer(this.mainWindow, errorMsg);
+        throw new Error(errorMsg);
       }
     }
 

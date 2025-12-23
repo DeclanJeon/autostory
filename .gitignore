@@ -138,3 +138,5 @@ app/dist/
 docs
 
 .kilocode
+.cline
+scripts/
