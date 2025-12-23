@@ -1,7 +1,3 @@
-<div align="center">
-  <img width="1200" height="475" alt="AutoTistory AI Writer" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
-
 # AutoTistory AI Writer v1.0
 
 AI 기반 티스토리 콘텐츠 자동 생성 및 발행 도구
