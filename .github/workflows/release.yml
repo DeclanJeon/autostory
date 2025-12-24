@@ -3,10 +3,10 @@ name: Build and Release
 on:
   push:
     tags:
-      - "v*" # v1.0.0 등 태그가 푸시되면 실행
+      - "v*"
 
 permissions:
-  contents: write # 릴리스 생성을 위해 쓰기 권한 필수
+  contents: write
 
 jobs:
   release:
@@ -21,31 +21,33 @@ jobs:
       - name: Check out Git repository
         uses: actions/checkout@v4
 
-      # [중요] Node 설치보다 pnpm 설치가 먼저 와야 합니다!
+      # pnpm 설치
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 9.15.0
           run_install: false
 
+      # Node.js 설정
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: "pnpm"
 
-      # [Linux 전용] Linux 빌드 시 필요한 시스템 라이브러리 설치
+      # [수정됨] Ubuntu 의존성 패키지 이름 수정 (Exit code 100 해결)
       - name: Install Linux Dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libicns-utils graphicsmagick
+          sudo apt-get install -y icnsutils graphicsmagick rpm
 
-      # 의존성 설치 (postinstall 스크립트 실행 포함)
+      # [수정됨] frozen-lockfile 제거 (Exit code 1 해결)
+      # 락파일이 없어도 package.json 기반으로 설치를 진행하도록 변경
       - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
-      # [중요] Playwright 브라우저 의존성 명시적 설치 (Ubuntu 이슈 방지)
+      # Playwright 브라우저 설치
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps
 
@@ -53,10 +55,12 @@ jobs:
       - name: Build Renderer & Main
         run: pnpm build
 
-      # Electron 빌드 및 GitHub Release 업로드
+      # 배포 실행
       - name: Publish App
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # API 키가 필요하다면 Secrets에 추가 후 주석 해제
+          # GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         shell: bash
         run: |
           if [ "$RUNNER_OS" == "Windows" ]; then
