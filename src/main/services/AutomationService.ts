@@ -2,6 +2,7 @@ import { chromium, Browser, BrowserContext, Page } from "playwright";
 import store from "../config/store";
 import { logger, sendLogToRenderer } from "../utils/logger";
 import { AiService } from "./AiService";
+import { browserManager } from "./BrowserManager";
 import {
   TISTORY_SELECTORS,
   HOME_TOPIC_KEYWORDS,
@@ -133,40 +134,69 @@ export class AutomationService {
 
     await this.cleanupBrowser();
 
-    sendLogToRenderer(this.mainWindow, "브라우저(Playwright) 초기화 중...");
+    // 1. 브라우저 설치 확인 및 다운로드 요청
+    const isInstalled = await browserManager.isInstalled();
 
-    try {
-      // 1순위: 시스템 Chrome 시도
-      logger.info("시스템 Chrome 실행 시도...");
-      this.browser = await chromium.launch({
-        headless: false,
-        args: ["--start-maximized", "--no-sandbox", "--disable-setuid-sandbox"],
-        channel: "chrome", // 시스템에 설치된 Chrome 사용
-      });
-    } catch (e: any) {
-      logger.warn(`Chrome 실행 실패: ${e.message}. Chromium 시도.`);
+    if (!isInstalled) {
+      logger.info("내장 브라우저 없음. 다운로드 시작.");
+
+      // 메인 윈도우에 이벤트 전송
+      if (this.mainWindow) {
+        this.mainWindow.webContents.send("browser-download-start");
+      }
 
       try {
-        // 2순위: 번들링된 Chromium 시도 (하지만 배포판엔 없을 확률 높음)
-        // 리눅스의 경우 별도 설치가 필요할 수 있음
-        this.browser = await chromium.launch({
-          headless: false,
-          args: [
-            "--start-maximized",
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-          ],
+        await browserManager.install((progress) => {
+          if (this.mainWindow) {
+            this.mainWindow.webContents.send(
+              "browser-download-progress",
+              progress
+            );
+          }
         });
-      } catch (retryError: any) {
-        const errorMsg =
-          process.platform === "linux"
-            ? '브라우저를 찾을 수 없습니다. Chrome이 설치되어 있는지 확인하거나 "npx playwright install chromium"을 실행하세요.'
-            : "Google Chrome 브라우저가 설치되어 있어야 합니다.";
 
-        logger.error(errorMsg);
-        sendLogToRenderer(this.mainWindow, errorMsg);
-        throw new Error(errorMsg);
+        if (this.mainWindow) {
+          this.mainWindow.webContents.send("browser-download-complete");
+        }
+      } catch (error: any) {
+        logger.error(`브라우저 설치 실패: ${error}`);
+        if (this.mainWindow) {
+          this.mainWindow.webContents.send(
+            "browser-download-error",
+            error.message
+          );
+        }
+        throw new Error("필수 브라우저 구성요소 설치에 실패했습니다.");
       }
+    }
+
+    // 2. 설치된 브라우저 경로 가져오기
+    const executablePath = browserManager.getExecutablePath();
+    logger.info(`Launching browser from: ${executablePath}`);
+
+    try {
+      this.browser = await chromium.launch({
+        headless: false,
+        executablePath: executablePath, // 시스템 크롬 대신 다운로드한 파일 사용
+        args: [
+          "--start-maximized",
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-blink-features=AutomationControlled",
+        ],
+      });
+    } catch (e: any) {
+      // Linux 라이브러리 부족 시 안내
+      if (
+        process.platform === "linux" &&
+        e.message.includes("error while loading shared libraries")
+      ) {
+        const msg =
+          "Linux 시스템 라이브러리가 부족합니다. (libgbm1, libasound2 등)";
+        logger.error(msg);
+        sendLogToRenderer(this.mainWindow, msg);
+      }
+      throw e;
     }
 
     this.browser.on("disconnected", () => {

@@ -9,10 +9,13 @@ import PostList from "./pages/PostList";
 import Templates from "./pages/Templates";
 import { ProtectedRoute } from "./components/AuthGuard";
 import ToastProvider from "./components/Toast";
+import BrowserDownloadModal from "./components/BrowserDownloadModal";
 
 const App: React.FC = () => {
   return (
     <ToastProvider>
+      {/* 브라우저 다운로드 모달은 최상위에 위치 */}
+      <BrowserDownloadModal />
       <HashRouter>
         <Layout>
           <Routes>

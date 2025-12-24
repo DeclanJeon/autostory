@@ -481,6 +481,26 @@ declare global {
       onLoginStateChange: (
         callback: (event: any, data: { state: string; message: string }) => void
       ) => () => void;
+
+      // ============================================================
+      // 브라우저 다운로드
+      // ============================================================
+      onBrowserDownloadStart: (callback: () => void) => () => void;
+      onBrowserDownloadProgress: (
+        callback: (
+          event: any,
+          data: {
+            total: number;
+            current: number;
+            percent: number;
+            status: string;
+          }
+        ) => void
+      ) => () => void;
+      onBrowserDownloadComplete: (callback: () => void) => () => void;
+      onBrowserDownloadError: (
+        callback: (event: any, msg: string) => void
+      ) => () => void;
     };
   }
 }

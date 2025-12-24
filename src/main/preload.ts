@@ -210,4 +210,26 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("login-state-change", subscription);
     return () => ipcRenderer.removeListener("login-state-change", subscription);
   },
+
+  // ============ 브라우저 다운로드 ============
+  onBrowserDownloadStart: (callback: () => void) => {
+    const subscription = (_event: any) => callback();
+    ipcRenderer.on("browser-download-start", subscription);
+    return () => ipcRenderer.removeAllListeners("browser-download-start");
+  },
+  onBrowserDownloadProgress: (callback: (event: any, data: any) => void) => {
+    const subscription = (_event: any, data: any) => callback(_event, data);
+    ipcRenderer.on("browser-download-progress", subscription);
+    return () => ipcRenderer.removeAllListeners("browser-download-progress");
+  },
+  onBrowserDownloadComplete: (callback: () => void) => {
+    const subscription = (_event: any) => callback();
+    ipcRenderer.on("browser-download-complete", subscription);
+    return () => ipcRenderer.removeAllListeners("browser-download-complete");
+  },
+  onBrowserDownloadError: (callback: (event: any, msg: string) => void) => {
+    const subscription = (_event: any, msg: string) => callback(_event, msg);
+    ipcRenderer.on("browser-download-error", subscription);
+    return () => ipcRenderer.removeAllListeners("browser-download-error");
+  },
 });
