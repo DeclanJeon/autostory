@@ -16,6 +16,7 @@ files:
 asarUnpack:
   - "node_modules/@napi-rs/canvas"
   - "node_modules/playwright-core"
+  - "node_modules/extract-zip"
   - "resources/**"
 
 disableSanityCheckAsar: true

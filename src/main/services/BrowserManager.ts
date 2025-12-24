@@ -2,12 +2,12 @@ import fs from "fs-extra";
 import path from "path";
 import { app } from "electron";
 import https from "https";
+import http from "http";
 import extract from "extract-zip";
 import * as tar from "tar";
 import { logger } from "../utils/logger";
 
 // Playwright 1.49.0 대응 Chromium Revision (Build 1148 / 131.0.x)
-// 이 버전은 주기적으로 업데이트가 필요할 수 있습니다.
 const CHROMIUM_REVISION = "1148";
 
 export interface DownloadProgress {
@@ -17,20 +17,12 @@ export interface DownloadProgress {
   status: string;
 }
 
-/**
- * 브라우저 관리자 클래스
- *
- * OS별 브라우저 다운로드, 설치, 경로 관리를 담당합니다.
- *
- * @class BrowserManager
- */
 export class BrowserManager {
   private static instance: BrowserManager;
   private basePath: string;
   private browserPath: string;
 
   private constructor() {
-    // OS별 권한 문제 방지를 위해 userData(AppData/Application Support) 내부에 저장
     this.basePath = path.join(app.getPath("userData"), "browsers");
     this.browserPath = path.join(
       this.basePath,
@@ -38,12 +30,6 @@ export class BrowserManager {
     );
   }
 
-  /**
-   * 싱글톤 인스턴스를 반환합니다.
-   *
-   * @static
-   * @returns {BrowserManager} 싱글톤 인스턴스
-   */
   public static getInstance(): BrowserManager {
     if (!BrowserManager.instance) {
       BrowserManager.instance = new BrowserManager();
@@ -51,15 +37,8 @@ export class BrowserManager {
     return BrowserManager.instance;
   }
 
-  /**
-   * 현재 플랫폼에 맞는 브라우저 실행 파일 경로를 반환합니다.
-   *
-   * @public
-   * @returns {string} 실행 파일의 절대 경로
-   */
   public getExecutablePath(): string {
     const platform = process.platform;
-
     if (platform === "win32") {
       return path.join(this.browserPath, "chrome-win", "chrome.exe");
     } else if (platform === "darwin") {
@@ -76,23 +55,11 @@ export class BrowserManager {
     }
   }
 
-  /**
-   * 브라우저가 이미 설치되어 있는지 확인합니다.
-   *
-   * @public
-   * @returns {Promise<boolean>} 설치되어 있으면 true
-   */
   public async isInstalled(): Promise<boolean> {
     const execPath = this.getExecutablePath();
     return fs.pathExists(execPath);
   }
 
-  /**
-   * 현재 플랫폼에 맞는 다운로드 URL을 반환합니다.
-   *
-   * @private
-   * @returns {string} 다운로드 URL
-   */
   private getDownloadUrl(): string {
     const platform = process.platform;
     const baseUrl = `https://playwright.azureedge.net/builds/chromium/${CHROMIUM_REVISION}`;
@@ -110,16 +77,87 @@ export class BrowserManager {
   }
 
   /**
-   * 브라우저를 다운로드하고 설치합니다.
-   *
-   * @public
-   * @param {(progress: DownloadProgress) => void} onProgress - 다운로드 진행 상황 콜백
-   * @returns {Promise<void>}
+   * [FIX] 리다이렉트를 지원하는 다운로드 헬퍼 함수
    */
+  private downloadFile(
+    url: string,
+    destination: string,
+    onProgress: (current: number, total: number) => void
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const file = fs.createWriteStream(destination);
+
+      const handleRequest = (requestUrl: string) => {
+        logger.info(`Downloading from: ${requestUrl}`);
+
+        https
+          .get(requestUrl, (response) => {
+            // 리다이렉트 처리 (301, 302)
+            if (
+              response.statusCode &&
+              response.statusCode >= 300 &&
+              response.statusCode < 400 &&
+              response.headers.location
+            ) {
+              logger.info(`Redirecting to: ${response.headers.location}`);
+              return handleRequest(response.headers.location);
+            }
+
+            if (response.statusCode !== 200) {
+              file.close();
+              fs.unlink(destination).catch(() => {}); // 에러 시 파일 삭제
+              reject(
+                new Error(
+                  `Download failed with HTTP status code: ${response.statusCode}`
+                )
+              );
+              return;
+            }
+
+            const total = parseInt(
+              response.headers["content-length"] || "0",
+              10
+            );
+            let current = 0;
+
+            response.on("data", (chunk) => {
+              current += chunk.length;
+              onProgress(current, total);
+              file.write(chunk);
+            });
+
+            response.on("end", () => {
+              // [FIX] Windows File Locking 문제 해결을 위해 close 콜백 사용
+              file.end(() => {
+                file.close(() => {
+                  logger.info("Download stream closed successfully.");
+                  resolve();
+                });
+              });
+            });
+
+            response.on("error", (err) => {
+              file.close();
+              fs.unlink(destination).catch(() => {});
+              reject(err);
+            });
+          })
+          .on("error", (err) => {
+            file.close();
+            fs.unlink(destination).catch(() => {});
+            reject(err);
+          });
+      };
+
+      handleRequest(url);
+    });
+  }
+
   public async install(
     onProgress: (progress: DownloadProgress) => void
   ): Promise<void> {
     if (await this.isInstalled()) {
+      logger.info("Browser already installed.");
       return;
     }
 
@@ -130,67 +168,47 @@ export class BrowserManager {
     await fs.ensureDir(this.basePath);
     logger.info(`Starting browser download: ${url}`);
 
-    // 1. 다운로드
-    await new Promise<void>((resolve, reject) => {
-      const file = fs.createWriteStream(downloadPath);
-      const request = https.get(url, (response) => {
-        if (response.statusCode !== 200) {
-          reject(new Error(`Download failed: HTTP ${response.statusCode}`));
-          return;
-        }
-
-        const total = parseInt(response.headers["content-length"] || "0", 10);
-        let current = 0;
-
-        response.on("data", (chunk) => {
-          current += chunk.length;
-          const percent = total > 0 ? Math.round((current / total) * 100) : 0;
-
-          onProgress({
-            total,
-            current,
-            percent,
-            status: "브라우저 엔진 다운로드 중...",
-          });
-        });
-
-        response.pipe(file);
-
-        file.on("finish", () => {
-          file.close();
-          resolve();
-        });
-      });
-
-      request.on("error", (err) => {
-        fs.unlink(downloadPath).catch(() => {});
-        reject(err);
-      });
-    });
-
-    // 2. 압축 해제
-    onProgress({
-      total: 100,
-      current: 100,
-      percent: 100,
-      status: "설치 및 최적화 중...",
-    });
-    logger.info("Extracting browser...");
-
     try {
+      // 1. 다운로드 (개선된 함수 사용)
+      await this.downloadFile(url, downloadPath, (current, total) => {
+        const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+        onProgress({
+          total,
+          current,
+          percent,
+          status: "브라우저 엔진 다운로드 중...",
+        });
+      });
+
+      // 2. 압축 해제
+      onProgress({
+        total: 100,
+        current: 100,
+        percent: 100,
+        status: "설치 및 최적화 중...",
+      });
+      logger.info("Extracting browser...");
+
       if (fileName.endsWith(".zip")) {
         await extract(downloadPath, { dir: this.browserPath });
       } else {
-        // Linux (.zip이 아닐 경우 대비, 보통 CDN은 zip을 주지만 예외처리)
         if (fileName.endsWith(".tgz") || fileName.endsWith(".tar.gz")) {
           await tar.extract({ file: downloadPath, cwd: this.basePath });
         } else {
-          // Linux zip 처리
           await extract(downloadPath, { dir: this.browserPath });
         }
       }
 
-      // 실행 권한 부여 (Mac/Linux)
+      // 3. 임시 파일 정리 (Windows 권한 에러 방지를 위해 약간의 지연 후 시도)
+      setTimeout(async () => {
+        try {
+          await fs.unlink(downloadPath);
+        } catch (e) {
+          logger.warn(`Failed to cleanup temp file: ${e}`);
+        }
+      }, 1000);
+
+      // 4. 실행 권한 부여 (Mac/Linux)
       if (process.platform !== "win32") {
         const execPath = this.getExecutablePath();
         if (await fs.pathExists(execPath)) {
@@ -199,16 +217,17 @@ export class BrowserManager {
       }
 
       logger.info("Browser installed successfully.");
-    } catch (error) {
-      logger.error(`Extraction failed: ${error}`);
+    } catch (error: any) {
+      logger.error(`Installation failed: ${error.message}`);
+      // 실패 시 다운로드 파일 정리 시도
+      try {
+        if (await fs.pathExists(downloadPath)) {
+          await fs.unlink(downloadPath);
+        }
+      } catch {}
       throw error;
-    } finally {
-      await fs.unlink(downloadPath).catch(() => {});
     }
   }
 }
 
-/**
- * 싱글톤 인스턴스 내보내기
- */
 export const browserManager = BrowserManager.getInstance();
