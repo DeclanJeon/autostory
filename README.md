@@ -152,6 +152,32 @@ AutoTistory AI Writer는 AI 기술을 활용하여 티스토리 블로그 콘텐
    - 발행할 블로그 선택
    - 카테고리 설정
 
+### ⚠️ 실행 시 보안 경고가 뜨는 경우
+
+본 애플리케이션은 아직 코드 서명이 되지 않았습니다. 설치 시 다음과 같이 진행해주세요.
+
+**macOS:**
+
+1. 앱을 `Applications` 폴더로 이동합니다.
+2. 실행 시 "파일이 손상되었습니다" 경고가 뜬다면 터미널에서 다음 명령어를 실행하세요:
+   ```bash
+   xattr -cr /Applications/AutoStory.app
+   ```
+   또는 앱 아이콘을 우클릭(Control+클릭) 후 '열기'를 선택하고 '열기' 버튼을 누르세요.
+
+**Windows:**
+
+1. "Windows의 PC 보호" 파란색 창이 뜨면 **[추가 정보]**를 클릭하세요.
+2. 하단에 나타나는 [실행] 버튼을 클릭하세요.
+
+**Linux:**
+
+- Linux용 AppImage를 다운로드 후 실행 권한을 부여하세요:
+  ```bash
+  chmod +x AutoStory-*.AppImage
+  ./AutoStory-*.AppImage
+  ```
+
 ## 📖 사용 방법
 
 ### 1. 대시보드

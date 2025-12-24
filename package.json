@@ -8,6 +8,7 @@
     "url": "https://github.com/DeclanJeon/autostory.git"
   },
   "author": "AutoStory Team",
+  "packageManager": "pnpm@9.15.0",
   "main": "./dist/main/main.js",
   "scripts": {
     "dev": "concurrently \"vite\" \"pnpm build:main && pnpm electron\"",
