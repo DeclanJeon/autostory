@@ -2,7 +2,7 @@ import { chromium, Browser, BrowserContext, Page } from "playwright";
 import store from "../config/store";
 import { logger, sendLogToRenderer } from "../utils/logger";
 import { AiService } from "./AiService";
-import { browserManager } from "./BrowserManager";
+import { browserManager } from "./BrowserManager.js";
 import {
   TISTORY_SELECTORS,
   HOME_TOPIC_KEYWORDS,
