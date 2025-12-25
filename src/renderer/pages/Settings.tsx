@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { recommendedFeeds } from "../data/recommendedFeeds";
+import RssBulkImportModal from "../components/RssBulkImportModal";
 import {
   LocalAiStatus,
   ModelWithRecommendation,
@@ -57,6 +58,7 @@ const Settings: React.FC = () => {
   const [searchModelTerm, setSearchModelTerm] = useState("");
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [showBulkImportModal, setShowBulkImportModal] = useState(false);
 
   // useRef를 사용하여 최신 availableModels 값 참조
   const availableModelsRef = useRef<string[]>([]);
@@ -530,7 +532,12 @@ const Settings: React.FC = () => {
       <div className="space-y-4 bg-white p-6 rounded shadow">
         {/* 기본 설정 섹션 */}
         <div>
-          <label className="block font-medium mb-1">블로그 이름</label>
+          <label className="block font-medium mb-1">
+            티스토리 서브도메인
+            <span className="text-xs font-normal text-gray-500 ml-2">
+              (tistory.com 앞의 주소)
+            </span>
+          </label>
           <input
             type="text"
             className="w-full border p-2 rounded text-slate-800"
@@ -543,8 +550,12 @@ const Settings: React.FC = () => {
                 writeRedirectUrl: `https://${name}.tistory.com/manage/newpost/?type=post&returnURL=%2Fmanage%2Fposts%2F`,
               });
             }}
-            placeholder="티스토리 블로그 이름 (예: myblog)"
+            placeholder="서브도메인만 입력 (예: myblog)"
           />
+          <p className="text-xs text-gray-500 mt-1">
+            💡 예: <strong>myblog</strong>.tistory.com → <strong>myblog</strong>
+            만 입력하세요
+          </p>
         </div>
 
         {/* 글쓰기 리다이렉트 URL (자동 관리되므로 숨김 처리) */}
@@ -1361,13 +1372,35 @@ const Settings: React.FC = () => {
               <span className="text-lg">📡</span>
               RSS 피드 목록
             </label>
-            <button
-              onClick={loadRecommendedFeeds}
-              className="text-sm px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg hover:from-green-600 hover:to-green-700 transition-all shadow-sm flex items-center gap-2"
-            >
-              <span>📚</span>
-              추천 RSS 불러오기
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowBulkImportModal(true)}
+                className="text-sm px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all shadow-sm flex items-center gap-2"
+              >
+                <span>📥</span>
+                일괄 추가
+              </button>
+              <button
+                onClick={loadRecommendedFeeds}
+                className="text-sm px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg hover:from-green-600 hover:to-green-700 transition-all shadow-sm flex items-center gap-2"
+              >
+                <span>📚</span>
+                추천 RSS 불러오기
+              </button>
+              <button
+                onClick={() => {
+                  if (confirm("모든 RSS 피드를 초기화하시겠습니까?")) {
+                    setFormData({ ...formData, rssUrls: [""] });
+                    setStatus("✅ RSS 피드가 초기화되었습니다.");
+                    setTimeout(() => setStatus(""), 3000);
+                  }
+                }}
+                className="text-sm px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg hover:from-red-600 hover:to-red-700 transition-all shadow-sm flex items-center gap-2"
+              >
+                <span>🔄</span>
+                초기화
+              </button>
+            </div>
           </div>
           <div className="max-h-64 overflow-y-auto bg-gray-50 rounded-lg p-3 border-2 border-gray-200">
             {formData.rssUrls.map((url, idx) => (
@@ -1460,6 +1493,22 @@ const Settings: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* RSS 일괄 추가 모달 */}
+      <RssBulkImportModal
+        isOpen={showBulkImportModal}
+        onClose={() => setShowBulkImportModal(false)}
+        onImport={(urls) => {
+          // 기존 URL과 중복 제거
+          const existingUrls = new Set(formData.rssUrls);
+          const uniqueUrls = urls.filter((url) => !existingUrls.has(url));
+
+          const newRssUrls = [...formData.rssUrls, ...uniqueUrls];
+          setFormData({ ...formData, rssUrls: newRssUrls });
+          setStatus(`✅ ${uniqueUrls.length}개의 RSS 피드가 추가되었습니다.`);
+          setTimeout(() => setStatus(""), 3000);
+        }}
+      />
     </div>
   );
 };
