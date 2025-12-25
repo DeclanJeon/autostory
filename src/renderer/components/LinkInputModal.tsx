@@ -43,6 +43,33 @@ const LinkInputModal: React.FC<LinkInputModalProps> = ({
     }
   };
 
+  // [신규] 리스트에 저장 핸들러
+  const handleAddToList = async () => {
+    if (!url) {
+      alert("URL을 입력해주세요.");
+      return;
+    }
+
+    try {
+      const result = await window.electronAPI.addMaterial({
+        type: "link",
+        value: url,
+        title: url, // 임시 제목
+        category,
+      });
+
+      if (result.success) {
+        alert("✅ 소재 리스트에 저장되었습니다.");
+        onClose();
+        setUrl("");
+      } else {
+        alert(`저장 실패: ${result.error}`);
+      }
+    } catch (e: any) {
+      alert(`오류: ${e.message}`);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -77,7 +104,7 @@ const LinkInputModal: React.FC<LinkInputModalProps> = ({
               disabled={isProcessing}
             />
           </div>
-          
+
           {isProcessing && (
             <div className="text-sm text-blue-600 animate-pulse">
               AI가 링크 내용을 분석하고 글을 작성 중입니다... (약 15-30초 소요)
@@ -85,7 +112,7 @@ const LinkInputModal: React.FC<LinkInputModalProps> = ({
           )}
         </div>
 
-        <div className="mt-6 flex justify-end gap-3">
+        <div className="mt-6 flex justify-end gap-2">
           <button
             onClick={onClose}
             className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
@@ -93,6 +120,17 @@ const LinkInputModal: React.FC<LinkInputModalProps> = ({
           >
             취소
           </button>
+
+          {/* [신규] 리스트에 저장 버튼 */}
+          <button
+            onClick={handleAddToList}
+            className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 font-bold"
+            disabled={isProcessing}
+          >
+            📥 나중에 발행 (저장)
+          </button>
+
+          {/* 기존 즉시 생성 버튼 */}
           <button
             onClick={handleSubmit}
             className={`px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-bold ${
@@ -100,7 +138,7 @@ const LinkInputModal: React.FC<LinkInputModalProps> = ({
             }`}
             disabled={isProcessing}
           >
-            {isProcessing ? "생성 중..." : "글 생성 시작"}
+            {isProcessing ? "생성 중..." : "🚀 바로 생성"}
           </button>
         </div>
       </div>

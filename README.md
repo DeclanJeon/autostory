@@ -56,6 +56,12 @@ AutoTistory AI Writer는 AI 기술을 활용하여 티스토리 블로그 콘텐
 - **카테고리 관리**: 자동 카테고리 생성 및 관리
 - **예약 발행**: 원하는 시간에 콘텐츠 발행 예약
 
+### ⏰ 고급 스케줄링 & 불침번 모드 (New v1.3.0)
+
+- **Rapid Scheduling**: 5분, 10분 단위의 초고속 발행 지원 (테스트 및 급속 배포용)
+- **Insomnia Mode**: 스케줄러 작동 시 OS의 절전 모드 및 화면 꺼짐을 자동으로 차단합니다. (자동화 봇의 끊김 없는 작동 보장)
+- **Fail-Safe**: 스케줄러 중지 또는 앱 종료 시 자동으로 절전 차단을 해제하여 배터리를 보호합니다.
+
 ### 📊 데이터 관리
 
 - **파일 관리**: 생성된 콘텐츠의 체계적인 저장 및 관리
@@ -370,7 +376,47 @@ src/
 - **기능 요청**: [GitHub Discussions](https://github.com/Declan-User/autostory/discussions)
 - **문의사항**: [이메일](mailto:ponslink@gmail.com)
 
+## 🔧 트러블슈팅 (Troubleshooting)
+
+### Linux 실행 시 "Sandbox" 관련 오류
+
+빌드된 AppImage 실행 시 권한 문제가 발생할 경우, 동봉된 스크립트를 사용하세요.
+
+```bash
+# 1. 스크립트 실행 권한 부여
+chmod +x scripts/linux-sandbox-fix.sh
+
+# 2. AppImage 패치 실행
+./scripts/linux-sandbox-fix.sh dist_electron/AutoStory-1.3.0.AppImage
+
+# 3. 패치된 파일 실행
+./dist_electron/AutoStory-1.3.0-linux-fixed.AppImage
+```
+
+### 스케줄러 작동 중 화면이 꺼지는 경우 (Linux)
+
+대부분의 경우 powerSaveBlocker가 자동으로 작동하지만, 일부 배포판에서는 xdg-utils가 필요할 수 있습니다.
+
+```bash
+sudo apt-get install xdg-utils libxss1
+```
+
 ## 🔄 변경 로그
+
+### v1.3.0 (2025-12-25)
+
+#### ⏰ 고급 스케줄링 & 불침번 모드
+
+- **Rapid Scheduling**: 5분, 10분 단위의 초고속 발행 지원 (테스트 및 급속 배포용)
+- **Insomnia Mode**: 스케줄러 작동 시 OS의 절전 모드 및 화면 꺼짐을 자동으로 차단
+- **Fail-Safe**: 스케줄러 중지 또는 앱 종료 시 자동으로 절전 차단을 해제하여 배터리 보호
+- **시각적 피드백**: 대시보드에 절전 방지 모드 상태 표시기 (⚡ NO SLEEP 뱃지)
+
+#### 🛠 기술적 개선
+
+- Electron powerSaveBlocker API 통합
+- 앱 종료 시 리소스 정리 강화 (before-quit 이벤트 핸들러)
+- 스케줄러 타입 확장 (5, 10, 30, 60, 120, 180, 240, 300분)
 
 ### v1.0.0 (2024-12-23)
 

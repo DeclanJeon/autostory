@@ -1,5 +1,19 @@
 // 완전한 타입 정의 파일
 
+/**
+ * 소재 아이템 타입 정의
+ */
+export interface MaterialItem {
+  id: string;
+  type: "link" | "file" | "text";
+  value: string; // URL, 파일 경로, 또는 텍스트 내용
+  title: string;
+  addedAt: number;
+  category: string;
+  tags: string[];
+  status: "pending" | "processed" | "failed";
+}
+
 export type TemplateType = "layout" | "prompt" | "persona";
 
 export type TemplateCategory =
@@ -237,13 +251,23 @@ export interface GenerateContentResult {
 }
 
 /**
+ * 원클릭 발행 옵션
+ */
+export interface OneClickPublishOptions {
+  mode: "random" | "queue";
+  selectedIds?: string[];
+}
+
+/**
  * 원클릭 발행 결과
+ * [수정됨] message 필드 추가 (일괄 처리 결과 요약용)
  */
 export interface OneClickPublishResult {
   success: boolean;
   title?: string;
   usedPrompt?: string;
   usedPersona?: string;
+  message?: string; // [NEW] 일괄 처리 완료 메시지
   error?: string;
 }
 
@@ -324,6 +348,9 @@ declare global {
       // 포스트
       listPosts: () => Promise<any[]>;
       readPost: (filePath: string) => Promise<string>;
+      deletePost: (
+        filePath: string
+      ) => Promise<{ success: boolean; error?: string }>;
 
       // ============================================================
       // 템플릿 관련 (확장)
@@ -376,10 +403,22 @@ declare global {
       // 콘텐츠 생성
       generateContent: (data: any) => Promise<GenerateContentResult>;
 
+      // 링크 분석 및 글 생성
+      processLinkAndGenerate: (data: {
+        url: string;
+        category: string;
+      }) => Promise<{
+        success: boolean;
+        filePath?: string;
+        title?: string;
+        error?: string;
+      }>;
+
       // 발행
       publishLatestPost: () => Promise<{ success: boolean; error?: string }>;
       publishPost: (
-        filePath: string
+        filePath: string,
+        category: string
       ) => Promise<{ success: boolean; error?: string }>;
 
       // 이미지 테스트
@@ -392,8 +431,10 @@ declare global {
         error?: string;
       }>;
 
-      // 원클릭 발행
-      oneClickPublish: () => Promise<OneClickPublishResult>;
+      // 원클릭 발행 (옵션 추가)
+      oneClickPublish: (
+        options?: OneClickPublishOptions
+      ) => Promise<OneClickPublishResult>;
 
       // 스케줄러
       getSchedulerStatus: () => Promise<SchedulerStatus>;
@@ -481,6 +522,21 @@ declare global {
       onLoginStateChange: (
         callback: (event: any, data: { state: string; message: string }) => void
       ) => () => void;
+
+      // ============================================================
+      // 소재 관리 API (신규)
+      // ============================================================
+      addMaterial: (data: {
+        type: "link" | "file" | "text";
+        value: string;
+        title: string;
+        category?: string;
+        tags?: string[];
+      }) => Promise<{ success: boolean; message?: string; error?: string }>;
+
+      getMaterials: () => Promise<MaterialItem[]>;
+
+      deleteMaterial: (id: string) => Promise<{ success: boolean }>;
 
       // ============================================================
       // 브라우저 다운로드

@@ -2,6 +2,20 @@ import Store from "electron-store";
 import { FeedItem } from "../services/RssService";
 
 /**
+ * 소재 아이템 타입 정의
+ */
+export interface MaterialItem {
+  id: string;
+  type: "link" | "file" | "text";
+  value: string; // URL, 파일 경로, 또는 텍스트 내용
+  title: string;
+  addedAt: number;
+  category: string;
+  tags: string[];
+  status: "pending" | "processed" | "failed";
+}
+
+/**
  * 템플릿 타입 정의
  */
 type TemplateType = "layout" | "prompt" | "persona";
@@ -66,6 +80,10 @@ interface UserSchema {
   };
   templates: ExtendedTemplate[];
   publishedPosts: string[];
+  // [신규] 중복 방지를 위한 링크 이력 (RSS URL 등)
+  publishedHistory: string[];
+  // [신규] 소재 보관함
+  materials: MaterialItem[];
   scheduler: {
     enabled: boolean;
     intervalMinutes: number;
@@ -76,6 +94,14 @@ interface UserSchema {
     installed: boolean;
     installedModels: string[];
     lastUsed: number;
+  };
+  // [신규] 보안 설정 (암호화된 API 키 저장용)
+  secure: {
+    [key: string]: string;
+  };
+  // [신규] 작업 큐
+  "job-queue": {
+    queue: any[];
   };
 }
 
@@ -1068,6 +1094,9 @@ const store = new Store<UserSchema>({
     },
     templates: allDefaultTemplates,
     publishedPosts: [],
+    // [신규] 초기값 추가
+    publishedHistory: [],
+    materials: [],
     scheduler: {
       enabled: false,
       intervalMinutes: 60,
@@ -1078,6 +1107,10 @@ const store = new Store<UserSchema>({
       installed: false,
       installedModels: [],
       lastUsed: 0,
+    },
+    secure: {},
+    "job-queue": {
+      queue: [],
     },
   },
   encryptionKey: "auto-story-secure-key",

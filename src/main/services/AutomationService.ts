@@ -215,16 +215,28 @@ export class AutomationService {
     };
 
     const authData = store.get("auth");
+
+    // [핵심 변경] 1순위: 전체 스토리지 상태 복원 (LocalStorage 포함)
     if (authData?.storageState) {
       contextOptions.storageState = authData.storageState;
       this.context = await this.browser.newContext(contextOptions);
-      sendLogToRenderer(this.mainWindow, "저장된 인증 상태 복원됨.");
-    } else if (authData?.cookies && authData.cookies.length > 0) {
+      logger.info("💾 저장된 전체 세션 상태(StorageState)를 복원합니다.");
+      sendLogToRenderer(
+        this.mainWindow,
+        "💾 저장된 전체 세션 상태(StorageState)를 복원합니다."
+      );
+    }
+    // 2순위: 쿠키만 복원 (하위 호환성)
+    else if (authData?.cookies && authData.cookies.length > 0) {
       this.context = await this.browser.newContext(contextOptions);
       await this.context.addCookies(authData.cookies);
-      sendLogToRenderer(this.mainWindow, "저장된 쿠키 복원됨.");
-    } else {
+      logger.info("🍪 저장된 쿠키만 복원합니다. (하위 호환성 모드)");
+      sendLogToRenderer(this.mainWindow, "🍪 저장된 쿠키만 복원합니다.");
+    }
+    // 3순위: 빈 컨텍스트 생성 (첫 로그인)
+    else {
       this.context = await this.browser.newContext(contextOptions);
+      logger.info("🆕 새로운 브라우저 컨텍스트 생성됨 (첫 로그인)");
     }
 
     this.page = await this.context.newPage();
@@ -345,16 +357,48 @@ export class AutomationService {
         sendLogToRenderer(this.mainWindow, "이미 로그인된 상태입니다.");
         this.loginState = "logged-in";
 
+        // [개선] 이미 로그인된 상태에서도 세션 상태 갱신
         if (this.context) {
-          const storageState = await this.context.storageState();
-          const cookies = await this.context.cookies();
-          const auth = store.get("auth");
-          store.set("auth", {
-            ...auth,
-            cookies,
-            storageState,
-            lastLogin: Date.now(),
-          });
+          try {
+            const storageState = await this.context.storageState();
+            const cookies = await this.context.cookies();
+            const auth = store.get("auth");
+            store.set("auth", {
+              ...auth,
+              cookies,
+              storageState,
+              lastLogin: Date.now(),
+            });
+
+            logger.info("🔄 기존 세션 상태가 갱신되었습니다.");
+          } catch (e) {
+            logger.warn(`세션 갱신 중 경고: ${e}`);
+          }
+        }
+        // [핵심 변경] 로그인 성공 시 전체 상태 저장
+        if (this.context) {
+          try {
+            const storageState = await this.context.storageState(); // 쿠키 + 로컬스토리지 덤프
+            const cookies = await this.context.cookies(); // 백업용
+
+            const auth = store.get("auth");
+            store.set("auth", {
+              ...auth,
+              cookies,
+              storageState, // 전체 상태 저장 (LocalStorage 포함)
+              lastLogin: Date.now(),
+            });
+
+            logger.info(
+              "✅ 로그인 세션 전체 상태가 영구 저장되었습니다. (StorageState + Cookies)"
+            );
+            sendLogToRenderer(
+              this.mainWindow,
+              "✅ 로그인 정보가 안전하게 저장되었습니다."
+            );
+          } catch (e) {
+            logger.error(`세션 저장 실패: ${e}`);
+          }
         }
 
         return { success: true, state: "logged-in" };
@@ -739,6 +783,7 @@ export class AutomationService {
     content: string,
     usedImageUrls?: Set<string>
   ): Promise<string> {
+    // [[IMAGE:...]] 또는 [[이미지:...]] 패턴 매칭
     const imageTagRegex = /\[\[IMAGE:\s*(.+?)\]\]/gi;
     const matches = [...content.matchAll(imageTagRegex)];
 
@@ -758,6 +803,7 @@ export class AutomationService {
       let imageUrl: string | null = null;
 
       try {
+        // 1단계: Google 검색 시도
         imageUrl = await this.fetchImageFromGoogle(keyword, usedUrls);
 
         if (imageUrl) {
@@ -768,13 +814,14 @@ export class AutomationService {
       }
 
       if (!imageUrl) {
+        // 2단계: Pexels 검색 시도 (Google 실패 시)
         try {
           imageUrl = await this.fetchRelevantImage(keyword);
 
           if (imageUrl) {
             if (usedUrls.has(imageUrl)) {
               logger.info(`Pexels 중복 이미지, 스킵: ${imageUrl}`);
-              imageUrl = null;
+              imageUrl = null; // 중복이면 폐기
             } else {
               sendLogToRenderer(
                 this.mainWindow,
@@ -787,15 +834,11 @@ export class AutomationService {
         }
       }
 
-      if (!imageUrl) {
-        const encodedKeyword = encodeURIComponent(keyword);
-        imageUrl = `https://placehold.co/800x400/EEE/31343C?font=roboto&text=${encodedKeyword}`;
-        sendLogToRenderer(this.mainWindow, `⚠️ Placeholder 사용: "${keyword}"`);
-      }
+      // [핵심 수정] 이미지를 찾았을 때만 HTML 생성
+      if (imageUrl) {
+        usedUrls.add(imageUrl);
 
-      usedUrls.add(imageUrl);
-
-      const htmlImage = `
+        const htmlImage = `
 <div style="display: flex; justify-content: center; margin: 40px 0;">
   <div style="max-width: 100%; text-align: center;">
     <img src="${imageUrl}" alt="${keyword}"
@@ -804,7 +847,16 @@ export class AutomationService {
   </div>
 </div>
 `;
-      newContent = newContent.replace(fullTag, htmlImage);
+        // 태그를 이미지 HTML로 교체
+        newContent = newContent.replace(fullTag, htmlImage);
+      } else {
+        // [핵심 수정] 이미지가 없으면 태그를 '빈 문자열'로 교체하여 제거 (텍스트 노출 방지)
+        logger.warn(`❌ 이미지 없음, 태그 삭제: "${keyword}"`);
+        newContent = newContent.replace(fullTag, "");
+
+        // 만약 태그가 단독으로 있던 문단(<p>[[IMAGE:..]]</p>)이 비게 되면 그것도 정리
+        newContent = newContent.replace(/<p>\s*<\/p>/gi, "");
+      }
     }
 
     return newContent;
@@ -1260,6 +1312,14 @@ export class AutomationService {
     );
     processedContent = await this.validateAndReplaceImages(processedContent);
 
+    // [최종 안전장치] 남은 태그 잔여물 강제 제거
+    // AI가 만든 태그([[IMAGE:...]] 또는 [[이미지:...]])가 처리되지 않고
+    // 본문에 그대로 남아있는 경우를 방지하기 위함입니다.
+    processedContent = processedContent.replace(
+      /\[\[(?:IMAGE|이미지):.*?\]\]/gi,
+      ""
+    );
+
     sendLogToRenderer(this.mainWindow, "콘텐츠 이미지 처리 완료");
     return processedContent;
   }
@@ -1520,15 +1580,24 @@ export class AutomationService {
 
       await this.selectCategory(page, categoryName);
 
-      // 제목 입력
+      // [FIX] 제목 입력 전 강력한 정제 (3차 방어)
+      // HTML 태그 제거, 마크다운 제거, 따옴표 제거
       const cleanTitle = title
-        .replace(/^[#\s]+/, "")
-        .replace(/#/g, "")
-        .replace(/\*\*/g, "")
-        .replace(/"/g, "")
+        .replace(/<[^>]*>/g, "") // HTML 태그 제거 (<strong> 등)
+        .replace(/^[#\s]+/, "") // 마크다운 헤더 제거
+        .replace(/\*\*/g, "") // 마크다운 볼드 제거
+        .replace(/["''""]/g, "") // 따옴표 제거
+        .replace(/&nbsp;/g, " ") // 엔티티 제거
+        .replace(/</g, "<")
+        .replace(/>/g, ">")
         .trim();
 
-      sendLogToRenderer(this.mainWindow, `제목 입력: ${cleanTitle}`);
+      // 제목이 DOCTYPE으로 되어있다면 '제목 없음'으로 강제 변경
+      const finalTitle = /^<!DOCTYPE/i.test(cleanTitle)
+        ? "제목 없음"
+        : cleanTitle;
+
+      sendLogToRenderer(this.mainWindow, `제목 입력: ${finalTitle}`);
 
       const titleInput = await page.waitForSelector("#post-title-inp", {
         timeout: 5000,
@@ -1538,7 +1607,7 @@ export class AutomationService {
         await page.keyboard.press(`${modifier}+a`);
         await page.keyboard.press("Backspace");
         await page.waitForTimeout(200);
-        await titleInput.fill(cleanTitle);
+        await titleInput.fill(finalTitle); // [Modified] cleanTitle -> finalTitle
       }
 
       await page.waitForTimeout(500);

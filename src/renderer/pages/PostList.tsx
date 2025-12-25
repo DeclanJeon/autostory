@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useToastHelpers } from "../components/Toast"; // Toast 알림 추가
 import FileUploadModal from "../components/FileUploadModal";
 import LinkInputModal from "../components/LinkInputModal";
@@ -13,6 +13,8 @@ interface PostFile {
 
 const PostList: React.FC = () => {
   const [posts, setPosts] = useState<PostFile[]>([]);
+  // [신규] 탭 상태
+  const [activeTab, setActiveTab] = useState<"draft" | "published">("draft");
   const [selectedPost, setSelectedPost] = useState<{
     name: string;
     content: string;
@@ -68,13 +70,13 @@ const PostList: React.FC = () => {
 
     try {
       await window.electronAPI.deletePost(filePath);
-      showSuccess("삭제 완료", "파일이 삭제되었습니다.");
+      showSuccess("파일이 삭제되었습니다.");
       loadPosts(); // 목록 갱신
       if (selectedPost?.path === filePath) {
         setSelectedPost(null); // 선택된 글이었다면 상세 뷰 닫기
       }
     } catch (e: any) {
-      showError("삭제 실패", e.message);
+      showError(e.message);
     }
   };
 
@@ -91,13 +93,10 @@ const PostList: React.FC = () => {
       const result = await window.electronAPI.publishPost(filePath, category);
 
       if (result.success) {
-        showSuccess("발행 성공", "글이 성공적으로 발행되었습니다!");
+        showSuccess("글이 성공적으로 발행되었습니다!");
         loadPosts(); // 목록 갱신 (발행됨 태그 업데이트)
       } else {
-        showError(
-          "발행 실패",
-          result.error || "알 수 없는 오류가 발생했습니다."
-        );
+        showError(result.error || "알 수 없는 오류가 발생했습니다.");
       }
     } catch (error: any) {
       showError("오류", error.message);
@@ -109,6 +108,13 @@ const PostList: React.FC = () => {
   const handleBack = () => {
     setSelectedPost(null);
   };
+
+  // [신규] 탭 필터링 로직
+  const filteredPosts = useMemo(() => {
+    return posts.filter((post) =>
+      activeTab === "published" ? post.isPublished : !post.isPublished
+    );
+  }, [posts, activeTab]);
 
   return (
     <div className="p-6 bg-gray-50 h-full flex flex-col text-slate-800">
@@ -167,7 +173,39 @@ const PostList: React.FC = () => {
         )}
       </h2>
 
-      <div className="flex-1 overflow-hidden bg-white rounded shadow border flex">
+      {/* [신규] 탭 네비게이션 */}
+      {!selectedPost && (
+        <div className="flex gap-1 mb-3 border-b border-gray-300">
+          <button
+            onClick={() => setActiveTab("draft")}
+            className={`px-5 py-2 font-bold text-sm rounded-t-lg transition-colors ${
+              activeTab === "draft"
+                ? "bg-white text-blue-600 border-t border-l border-r border-gray-300 -mb-[1px]"
+                : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+            }`}
+          >
+            📝 미발행 드래프트{" "}
+            <span className="ml-1 px-1.5 py-0.5 bg-gray-200 rounded-full text-xs">
+              {posts.filter((p) => !p.isPublished).length}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveTab("published")}
+            className={`px-5 py-2 font-bold text-sm rounded-t-lg transition-colors ${
+              activeTab === "published"
+                ? "bg-white text-green-600 border-t border-l border-r border-gray-300 -mb-[1px]"
+                : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+            }`}
+          >
+            ✅ 발행 완료{" "}
+            <span className="ml-1 px-1.5 py-0.5 bg-gray-200 rounded-full text-xs">
+              {posts.filter((p) => p.isPublished).length}
+            </span>
+          </button>
+        </div>
+      )}
+
+      <div className="flex-1 overflow-hidden bg-white rounded-b-lg rounded-tr-lg shadow border border-gray-300 flex">
         {selectedPost ? (
           <div className="flex-1 p-6 overflow-y-auto font-mono text-sm whitespace-pre-wrap">
             {selectedPost.content}
@@ -175,14 +213,16 @@ const PostList: React.FC = () => {
         ) : (
           <div className="flex-1 overflow-y-auto p-2">
             {loading ? (
-              <div className="text-center py-10 text-gray-500">로딩 중...</div>
-            ) : posts.length === 0 ? (
-              <div className="text-center py-10 text-gray-500">
-                생성된 글이 없습니다.
+              <div className="text-center py-20 text-gray-400">로딩 중...</div>
+            ) : filteredPosts.length === 0 ? (
+              <div className="text-center py-20 text-gray-400">
+                {activeTab === "draft"
+                  ? "발행 대기 중인 글이 없습니다."
+                  : "발행된 글 내역이 없습니다."}
               </div>
             ) : (
               <div className="divide-y">
-                {posts.map((post, idx) => (
+                {filteredPosts.map((post, idx) => (
                   <div
                     key={idx}
                     onClick={() => handlePostClick(post)}
@@ -204,10 +244,12 @@ const PostList: React.FC = () => {
                         <span>{new Date(post.createdAt).toLocaleString()}</span>
                       </div>
                     </div>
-                    
+
                     <div className="flex items-center gap-3">
-                      <span className="text-gray-400 text-sm group-hover:hidden">Example {">"}</span>
-                      <button 
+                      <span className="text-gray-400 text-sm group-hover:hidden">
+                        Example {">"}
+                      </span>
+                      <button
                         onClick={(e) => handleDelete(post.path, e)}
                         className="hidden group-hover:block text-red-500 hover:bg-red-50 p-2 rounded transition"
                         title="삭제"
@@ -223,13 +265,13 @@ const PostList: React.FC = () => {
         )}
       </div>
 
-      <FileUploadModal 
-        isOpen={isUploadModalOpen} 
-        onClose={() => setIsUploadModalOpen(false)} 
+      <FileUploadModal
+        isOpen={isUploadModalOpen}
+        onClose={() => setIsUploadModalOpen(false)}
         onSuccess={() => {
           loadPosts();
-          showSuccess("시리즈 생성 완료", "파일 분석 및 글 생성이 완료되었습니다.");
-        }} 
+          showSuccess("파일 분석 및 글 생성이 완료되었습니다.");
+        }}
       />
 
       <LinkInputModal
@@ -237,7 +279,7 @@ const PostList: React.FC = () => {
         onClose={() => setIsLinkModalOpen(false)}
         onSuccess={() => {
           loadPosts();
-          showSuccess("글 생성 완료", "링크 분석 및 글 생성이 완료되었습니다.");
+          showSuccess("링크 분석 및 글 생성이 완료되었습니다.");
         }}
       />
     </div>

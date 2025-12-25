@@ -132,7 +132,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   // ============ 원클릭 자동 발행 ============
-  oneClickPublish: () => ipcRenderer.invoke("one-click-publish"),
+  oneClickPublish: (options?: {
+    mode: "random" | "queue";
+    selectedIds?: string[];
+  }) => ipcRenderer.invoke("one-click-publish", options),
 
   // ============ 스케줄러 제어 ============
   getSchedulerStatus: () => ipcRenderer.invoke("get-scheduler-status"),

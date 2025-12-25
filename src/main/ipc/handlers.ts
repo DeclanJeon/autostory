@@ -1,4 +1,5 @@
 import { ipcMain } from "electron";
+import { v4 as uuidv4 } from "uuid";
 import { AutomationService } from "../services/AutomationService";
 import { RssService } from "../services/RssService";
 import { AiService } from "../services/AiService";
@@ -8,6 +9,8 @@ import {
   SchedulerService,
   ScheduleInterval,
 } from "../services/SchedulerService";
+import { secureConfig } from "../services/SecureConfigService";
+import { jobQueue } from "../services/JobQueueService";
 import { logger } from "../utils/logger";
 import store from "../config/store";
 import { ollamaInstaller, InstallProgress } from "../utils/ollamaInstaller";
@@ -26,13 +29,36 @@ export const registerHandlers = (mainWindow: any) => {
 
   schedulerInstance = new SchedulerService(mainWindow);
 
+  // [보안] 기존 설정을 보안 스토리지로 마이그레이션
+  secureConfig.migrateToSecureStorage();
+  logger.info("SecureConfigService migration check completed");
+
+  // [수정] 설정 저장 핸들러 (보안 적용)
   ipcMain.handle("save-settings", (_event, settings) => {
-    store.set("settings", settings);
+    // 민감한 키 분리 저장
+    if (settings.aiApiKey) {
+      secureConfig.setSecureItem("aiApiKey", settings.aiApiKey);
+    }
+    if (settings.openrouterApiKey) {
+      secureConfig.setSecureItem("openrouterApiKey", settings.openrouterApiKey);
+    }
+    if (settings.pexelsApiKey) {
+      secureConfig.setSecureItem("pexelsApiKey", settings.pexelsApiKey);
+    }
+
+    // 민감한 키 제외하고 일반 설정 저장
+    const publicSettings = { ...settings };
+    delete publicSettings.aiApiKey;
+    delete publicSettings.openrouterApiKey;
+    delete publicSettings.pexelsApiKey;
+
+    store.set("settings", publicSettings);
     return { success: true };
   });
 
-  ipcMain.handle("get-settings", () => {
-    return store.get("settings");
+  // [수정] 설정 조회 핸들러 (복호화 적용)
+  ipcMain.handle("get-settings", async () => {
+    return await secureConfig.getFullSettings();
   });
 
   ipcMain.handle("start-login", async () => {
@@ -594,11 +620,52 @@ export const registerHandlers = (mainWindow: any) => {
     }
   });
 
-  ipcMain.handle("one-click-publish", async () => {
+  // [스마트 핸들러] 원클릭 발행 핸들러 (RSS/Material 라우팅 추가)
+  ipcMain.handle("one-click-publish", async (_event, options) => {
     if (!schedulerInstance) {
       return { success: false, error: "스케줄러가 초기화되지 않았습니다." };
     }
-    return await schedulerInstance.runOneClickPublish();
+
+    const mode = options?.mode || "random";
+
+    // 큐 모드일 때 데이터 타입에 따라 분기 처리
+    if (
+      mode === "queue" &&
+      options?.selectedIds &&
+      options.selectedIds.length > 0
+    ) {
+      const firstId = options.selectedIds[0];
+
+      // URL 형식이면 RSS 큐로 처리 (http로 시작)
+      if (firstId.startsWith("http")) {
+        logger.info(
+          `Routing to RSS Queue (count: ${options.selectedIds.length})`
+        );
+        return await schedulerInstance.processRssQueue(options.selectedIds);
+      }
+      // 아니면 Material 큐로 처리 (UUID 등)
+      else {
+        logger.info(
+          `Routing to Material Queue (count: ${options.selectedIds.length})`
+        );
+        return await schedulerInstance.processMaterialQueue(
+          options.selectedIds
+        );
+      }
+    }
+
+    // 랜덤 모드 (기존 동작)
+    else {
+      return await schedulerInstance.runOneClickPublish({ mode: "random" });
+    }
+  });
+
+  // [신규] 다중 RSS 피드 발행 핸들러
+  ipcMain.handle("publish-multiple-rss", async (_event, { rssLinks }) => {
+    if (!schedulerInstance) {
+      return { success: false, error: "스케줄러가 초기화되지 않았습니다." };
+    }
+    return await schedulerInstance.processRssQueue(rssLinks);
   });
 
   ipcMain.handle("get-scheduler-status", () => {
@@ -790,4 +857,164 @@ export const registerHandlers = (mainWindow: any) => {
       currentTitle: "",
     };
   });
+
+  // ============================================================
+  // [신규] 소재 관리 핸들러
+  // ============================================================
+
+  /**
+   * 소재 추가
+   */
+  ipcMain.handle("add-material", async (_event, data) => {
+    try {
+      const materials = store.get("materials") || [];
+      // 중복 체크
+      if (materials.some((m: any) => m.value === data.value)) {
+        return { success: false, error: "이미 리스트에 존재하는 소재입니다." };
+      }
+
+      const newMaterial = {
+        id: uuidv4(),
+        type: data.type,
+        value: data.value,
+        title: data.title || "제목 없음",
+        category: data.category || "General",
+        tags: data.tags || [],
+        addedAt: Date.now(),
+        status: "pending",
+      };
+
+      store.set("materials", [...materials, newMaterial]);
+      logger.info(`소재 추가됨: ${newMaterial.title} (${newMaterial.type})`);
+      return { success: true, message: "소재가 저장되었습니다." };
+    } catch (e: any) {
+      logger.error(`소재 추가 실패: ${e.message}`);
+      return { success: false, error: e.message };
+    }
+  });
+
+  /**
+   * 소재 목록 조회
+   */
+  ipcMain.handle("get-materials", () => {
+    return store.get("materials") || [];
+  });
+
+  /**
+   * 소재 삭제
+   */
+  ipcMain.handle("delete-material", (_event, id) => {
+    try {
+      const materials = store.get("materials") || [];
+      store.set(
+        "materials",
+        materials.filter((m: any) => m.id !== id)
+      );
+      logger.info(`소재 삭제됨: ${id}`);
+      return { success: true };
+    } catch (e: any) {
+      logger.error(`소재 삭제 실패: ${e.message}`);
+      return { success: false, error: e.message };
+    }
+  });
+
+  // ============================================================
+  // [신규] 작업 큐 관련 핸들러
+  // ============================================================
+
+  /**
+   * 작업 큐 상태 조회
+   */
+  ipcMain.handle("get-job-queue-status", () => {
+    const jobs = jobQueue.getAllJobs();
+    return {
+      total: jobs.length,
+      pending: jobQueue.getPendingCount(),
+      processing: jobQueue.getProcessingCount(),
+      completed: jobQueue.getCompletedCount(),
+      failed: jobQueue.getFailedCount(),
+      jobs: jobs.filter(
+        (j) => j.status === "PENDING" || j.status === "PROCESSING"
+      ),
+    };
+  });
+
+  /**
+   * 모든 작업 조회
+   */
+  ipcMain.handle("get-all-jobs", () => {
+    return jobQueue.getAllJobs();
+  });
+
+  /**
+   * 특정 상태의 작업만 조회
+   */
+  ipcMain.handle("get-jobs-by-status", (_event, status) => {
+    return jobQueue.getJobsByStatus(status);
+  });
+
+  /**
+   * 작업 삭제
+   */
+  ipcMain.handle("delete-job", (_event, id) => {
+    try {
+      jobQueue.deleteJob(id);
+      return { success: true };
+    } catch (e: any) {
+      logger.error(`작업 삭제 실패: ${e.message}`);
+      return { success: false, error: e.message };
+    }
+  });
+
+  /**
+   * 작업 큐 초기화
+   */
+  ipcMain.handle("clear-job-queue", () => {
+    try {
+      jobQueue.clearAllJobs();
+      logger.info("작업 큐 초기화됨");
+      return { success: true };
+    } catch (e: any) {
+      logger.error(`작업 큐 초기화 실패: ${e.message}`);
+      return { success: false, error: e.message };
+    }
+  });
+
+  /**
+   * 실패한 작업 재시도 (PENDING 상태로 변경)
+   */
+  ipcMain.handle("retry-failed-jobs", () => {
+    try {
+      const jobs = jobQueue.getJobsByStatus("FAILED");
+      jobs.forEach((job) => {
+        jobQueue.updateJobStatus(job.id, "PENDING");
+      });
+      logger.info(`${jobs.length}개 실패 작업 재시용됨`);
+      return { success: true, count: jobs.length };
+    } catch (e: any) {
+      logger.error(`작업 재시도 실패: ${e.message}`);
+      return { success: false, error: e.message };
+    }
+  });
+
+  /**
+   * 오래된 작업 정리
+   */
+  ipcMain.handle("cleanup-stale-jobs", (_event, retentionMs = 86400000) => {
+    try {
+      jobQueue.cleanupStaleJobs(retentionMs);
+      return { success: true };
+    } catch (e: any) {
+      logger.error(`작업 정리 실패: ${e.message}`);
+      return { success: false, error: e.message };
+    }
+  });
+};
+
+// [신규] 앱 종료 시 스케줄러 리소스 정리 함수
+export const cleanupScheduler = () => {
+  if (schedulerInstance) {
+    console.log("Cleaning up scheduler resources...");
+    schedulerInstance.stopSchedule(); // 여기서 powerSaveBlocker.stop()이 호출됨
+  }
 };

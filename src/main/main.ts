@@ -1,8 +1,9 @@
 import { app, BrowserWindow } from "electron";
 import path from "path";
-import { registerHandlers } from "./ipc/handlers";
+import { registerHandlers, cleanupScheduler } from "./ipc/handlers";
 import store from "./config/store";
 import { ollamaInstaller } from "./utils/ollamaInstaller";
+import { secureConfig } from "./services/SecureConfigService";
 
 // Linux Sandbox 관련 명령줄 인자 처리
 if (process.platform === "linux") {
@@ -53,6 +54,15 @@ const createWindow = async () => {
 
   store.set("settings", updatedSettings);
 
+  // API Key 보안 스토리지 마이그레이션 (평문 -> 암호화)
+  try {
+    console.log("Migrating API keys to secure storage...");
+    secureConfig.migrateToSecureStorage();
+    console.log("API key migration completed");
+  } catch (error) {
+    console.error("API key migration failed:", error);
+  }
+
   console.log("Current Settings:", {
     provider: store.get("settings").aiProvider,
     model: store.get("settings").aiModel,
@@ -92,8 +102,9 @@ const createWindow = async () => {
 
 app.whenReady().then(createWindow);
 
-// 앱 종료 시 Ollama 서버 정리
+// 앱 종료 시 Ollama 서버 및 스케줄러 정리
 app.on("before-quit", async () => {
+  cleanupScheduler(); // 스케줄러 및 절전 차단기 해제
   await ollamaInstaller.stopServer();
 });
 

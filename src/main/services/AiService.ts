@@ -9,6 +9,8 @@ import {
   ExtendedTemplate,
   AutoSelectResult,
 } from "./TemplateManager";
+import { FIXED_CATEGORIES, CATEGORY_PROMPT_LIST } from "../config/categories";
+import { secureConfig } from "./SecureConfigService";
 
 /**
  * [NEW] 블로그 글 구조화 규칙 - 모든 프롬프트에 적용
@@ -88,6 +90,41 @@ export class AiService {
 
   constructor() {
     this.templateManager = new TemplateManager();
+  }
+
+  // ============================================================
+  // [신규] 제목 정제 헬퍼 메서드
+  // ============================================================
+
+  /**
+   * [FIX] 제목 정제 헬퍼 함수
+   * HTML 태그 제거, 마크다운 제거, 따옴표 제거, DOCTYPE 체크
+   * @param rawTitle - 원본 제목 문자열
+   * @returns 정제된 제목
+   */
+  private cleanTitle(rawTitle: string): string {
+    if (!rawTitle) return "";
+
+    let title = rawTitle;
+
+    // 1. HTML 태그 제거 (<strong>, <h1> 등)
+    title = title.replace(/<[^>]*>/g, "");
+
+    // 2. 마크다운 제거 (**, #, [, ])
+    title = title
+      .replace(/\*\*/g, "") // Bold
+      .replace(/^#+\s*/, "") // Header
+      .replace(/\[|\]/g, ""); // Brackets
+
+    // 3. 따옴표 및 불필요한 공백 제거
+    title = title.replace(/^["']|["']$/g, "").trim();
+
+    // 4. 시스템 문자열(DOCTYPE 등)이 제목이 된 경우 방지
+    if (/^<!DOCTYPE/i.test(title) || /^<html/i.test(title)) {
+      return "";
+    }
+
+    return title;
   }
 
   // ============================================================
@@ -684,7 +721,7 @@ ${chunk}
    * @returns 추출된 키워드 (영문)
    */
   public async extractKeyword(text: string): Promise<string> {
-    const settings = store.get("settings");
+    const settings = await secureConfig.getFullSettings();
     const apiKey = settings.aiApiKey || settings.openrouterApiKey;
     if (!apiKey) throw new Error("API Key가 없습니다.");
 
@@ -744,7 +781,7 @@ ${chunk}
   public async generateAdaptiveTemplates(
     content: string
   ): Promise<AutoSelectResult | null> {
-    const settings = store.get("settings");
+    const settings = await secureConfig.getFullSettings();
     const apiKey = settings.aiApiKey || settings.openrouterApiKey;
     if (!apiKey) return null;
 
@@ -1024,7 +1061,7 @@ ${chunk}
     usedPrompt?: string;
     usedPersona?: string;
   }> {
-    const settings = store.get("settings");
+    const settings = await secureConfig.getFullSettings();
     const provider = settings.aiProvider || "gemini";
 
     // 로컬 AI 처리
@@ -1337,15 +1374,29 @@ ${contextText}
       // [NEW] 콘텐츠 정규화 - 마크다운 변환 및 스타일 적용
       parseResult.content = this.normalizeHtmlContent(parseResult.content);
 
-      parseResult.title = parseResult.title
-        .replace(/^[#\s]+/, "")
-        .replace(/\*\*/g, "")
-        .replace(/"/g, "")
-        .trim();
+      // [FIX] 제목 정제 로직 강화 (cleanTitle 함수 사용)
+      parseResult.title = this.cleanTitle(parseResult.title);
 
+      // [FIX] 제목이 없거나 유효하지 않을 때 본문에서 추출하는 로직 개선
       if (!parseResult.title && parseResult.content.length > 0) {
-        const firstLine = parseResult.content.split("\n")[0];
-        parseResult.title = firstLine.replace(/^[#\s]+/, "").trim();
+        // 본문을 줄 단위로 나누어 유효한 텍스트가 나올 때까지 탐색
+        const lines = parseResult.content.split("\n");
+        for (const line of lines) {
+          const cleanedLine = this.cleanTitle(line); // 태그 제거된 텍스트
+          // 길이가 적당하고(2자 이상), DOCTYPE이 아닌 경우 선택
+          if (
+            cleanedLine.length > 2 &&
+            !cleanedLine.toUpperCase().startsWith("<!DOCTYPE")
+          ) {
+            parseResult.title = cleanedLine;
+            break;
+          }
+        }
+
+        // 그래도 없으면 기본값
+        if (!parseResult.title) {
+          parseResult.title = "제목 없음";
+        }
       }
 
       // 중복 제거 처리
@@ -1477,7 +1528,7 @@ ${contextText}
   }
 
   public async optimizeTemplate(currentContent: string): Promise<string> {
-    const settings = store.get("settings");
+    const settings = await secureConfig.getFullSettings();
     const apiKey = settings.aiApiKey;
     const modelName = settings.aiModel || "gemini-2.5-flash";
 
@@ -1559,7 +1610,7 @@ ${currentContent}
     content: string;
     description?: string;
   }> {
-    const settings = store.get("settings");
+    const settings = await secureConfig.getFullSettings();
     const provider = settings.aiProvider || "gemini";
     let apiKey = "";
     let modelName = settings.aiModel;
@@ -2074,7 +2125,7 @@ ${prompt}
     usedPrompt?: string;
     usedPersona?: string;
   }> {
-    const settings = store.get("settings");
+    const settings = await secureConfig.getFullSettings();
     const targetLanguage = settings.targetLanguage || "Korean";
 
     const contextText = selectedIssues
@@ -2445,5 +2496,164 @@ ${selectedTemplate?.content || ""}
         return paragraphs.join("\n\n");
       }
     );
+  }
+
+  /**
+   * [NEW] 콘텐츠 카테고리 자동 분류
+   * AI로 콘텐츠를 분석하여 적절한 카테고리를 선택합니다.
+   * @param content 분석할 콘텐츠
+   * @returns 결정된 카테고리명
+   */
+  public async classifyCategory(content: string): Promise<string> {
+    const settings = await secureConfig.getFullSettings();
+    const provider = settings.aiProvider || "gemini";
+    const targetLanguage = settings.targetLanguage || "Korean";
+
+    // 로컬 AI 처리
+    if (provider === "local") {
+      return await this.classifyCategoryWithLocalAi(content);
+    }
+
+    let apiKey = "";
+    let modelName = settings.aiModel;
+
+    if (provider === "openrouter") {
+      apiKey = settings.openrouterApiKey || "";
+      modelName = modelName || "xiaomi/mimo-v2-flash:free";
+    } else {
+      apiKey = settings.aiApiKey || "";
+      modelName = modelName || "gemini-2.5-flash";
+    }
+
+    if (!apiKey) {
+      logger.warn("API Key 없음, 기본 카테고리 '기타·잡담' 사용");
+      return "기타·잡담";
+    }
+
+    const prompt = `
+다음 콘텐츠를 분석하여 가장 적절한 카테고리를 선택하세요.
+
+[카테고리 목록 - 정확히 이 중 하나만 선택하세요]
+${CATEGORY_PROMPT_LIST}
+
+[콘텐츠]
+${content.substring(0, 1000)}
+
+[출력 형식]
+가장 적절한 카테고리명 하나만 출력하세요. 다른 텍스트를 추가하지 마세요.
+
+[작성 언어]
+${targetLanguage}
+`;
+
+    try {
+      let responseText = "";
+
+      if (provider === "gemini") {
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: modelName });
+        const result = await model.generateContent(prompt);
+        responseText = result.response.text();
+      } else {
+        const response = await fetch(
+          "https://openrouter.ai/api/v1/chat/completions",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+              "HTTP-Referer": "https://autostory-ai-writer.local",
+              "X-Title": "AutoStory AI Writer",
+            },
+            body: JSON.stringify({
+              model: modelName,
+              messages: [{ role: "user", content: prompt }],
+              temperature: 0.3,
+              max_tokens: 50,
+            }),
+          }
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          responseText = data.choices[0]?.message?.content || "";
+        }
+      }
+
+      const cleanedCategory = responseText.trim();
+
+      // 반환된 카테고리가 목록에 있는지 확인
+      if (FIXED_CATEGORIES.includes(cleanedCategory)) {
+        logger.info(`AI 카테고리 결정: ${cleanedCategory}`);
+        return cleanedCategory;
+      }
+
+      // 목록에 없으면 유사한 카테고리 검색
+      for (const category of FIXED_CATEGORIES) {
+        if (cleanedCategory.includes(category.substring(0, 2))) {
+          logger.info(`유사 카테고리 매칭: ${cleanedCategory} -> ${category}`);
+          return category;
+        }
+      }
+
+      // 기본값 반환
+      logger.warn(`카테고리 미매칭: ${cleanedCategory}, 기본값 사용`);
+      return "기타·잡담";
+    } catch (error) {
+      aiLogger.error(`카테고리 분류 실패: ${error}`);
+      return "기타·잡담";
+    }
+  }
+
+  /**
+   * 로컬 AI로 카테고리 분류
+   */
+  private async classifyCategoryWithLocalAi(content: string): Promise<string> {
+    const settings = await secureConfig.getFullSettings();
+    const prompt = `
+다음 콘텐츠를 분석하여 가장 적절한 카테고리를 선택하세요.
+
+[카테고리 목록]
+${CATEGORY_PROMPT_LIST}
+
+[콘텐츠]
+${content.substring(0, 1000)}
+
+가장 적절한 카테고리명 하나만 출력하세요.
+`;
+
+    try {
+      const result = await localAiService.chat(
+        [{ role: "user", content: prompt }],
+        {
+          model: settings.localAiModel,
+          temperature: 0.3,
+          maxTokens: 50,
+        }
+      );
+
+      if (result.success && result.content) {
+        const cleanedCategory = result.content.trim();
+
+        if (FIXED_CATEGORIES.includes(cleanedCategory)) {
+          logger.info(`로컬 AI 카테고리 결정: ${cleanedCategory}`);
+          return cleanedCategory;
+        }
+
+        for (const category of FIXED_CATEGORIES) {
+          if (cleanedCategory.includes(category.substring(0, 2))) {
+            logger.info(
+              `유사 카테고리 매칭: ${cleanedCategory} -> ${category}`
+            );
+            return category;
+          }
+        }
+      }
+
+      return "기타·잡담";
+    } catch (error) {
+      aiLogger.error(`로컬 AI 카테고리 분류 실패: ${error}`);
+      return "기타·잡담";
+    }
   }
 }
