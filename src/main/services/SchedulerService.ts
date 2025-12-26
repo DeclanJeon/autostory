@@ -3,7 +3,7 @@ import { AiService } from "./AiService";
 import { FileManager } from "./FileManager";
 import { AutomationService, LoginResult } from "./AutomationService";
 import { logger, sendLogToRenderer } from "../utils/logger";
-import store, { MaterialItem } from "../config/store";
+import store, { MaterialItem, addToPublishedHistory } from "../config/store";
 import { powerSaveBlocker } from "electron";
 import { jobQueue, Job, JobType } from "./JobQueueService";
 
@@ -48,6 +48,7 @@ export class SchedulerService {
   private powerBlockerId: number | null = null;
   private automation: AutomationService;
   private currentJobId: string | null = null;
+  private TISTORY_LIMIT = 15;
 
   constructor(window: any) {
     this.mainWindow = window;
@@ -290,6 +291,152 @@ export class SchedulerService {
   }
 
   /**
+   * [NEW] 일일 발행량 리셋 체크
+   */
+  private checkAndResetDailyUsage() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+    const localToday = `${year}-${month}-${day}`;
+
+    const usage = store.get("dailyUsage");
+
+    // 날짜가 변경되었으면 카운트 리셋
+    if (usage.lastResetDate !== localToday) {
+      logger.info(
+        `📅 날짜 변경 감지 (${usage.lastResetDate} -> ${localToday}). 발행량 초기화.`
+      );
+      store.set("dailyUsage", {
+        tistoryCount: 0,
+        lastResetDate: localToday,
+      });
+    }
+  }
+
+  /**
+   * [UPDATED] 공통 발행 로직 (티스토리 일일 제한 체크 포함)
+   */
+  private async publishToPlatforms(
+    filePath: string,
+    title: string,
+    category: string,
+    htmlContent: string
+  ): Promise<void> {
+    // 1. 발행 시작 전 사용량 체크 및 리셋
+    this.checkAndResetDailyUsage();
+
+    const settings = store.get("settings");
+    const dailyUsage = store.get("dailyUsage");
+    const results: string[] = [];
+    const errors: string[] = [];
+
+    // 2. 티스토리 발행 (선택 여부 확인)
+    if (settings.tistoryEnabled) {
+      try {
+        let reservationDate: Date | undefined = undefined;
+        let isReservation = false;
+
+        // 발행량 제한 체크
+        if (dailyUsage.tistoryCount >= this.TISTORY_LIMIT) {
+          logger.info(
+            `🛑 티스토리 일일 발행량 초과 (${dailyUsage.tistoryCount}/${this.TISTORY_LIMIT}). 예약 발행으로 전환.`
+          );
+
+          // 내일 날짜 설정
+          const tomorrow = new Date();
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          // 시간 분산: 오전 7시 ~ 10시 사이 랜덤
+          tomorrow.setHours(
+            7 + Math.floor(Math.random() * 4),
+            Math.floor(Math.random() * 60),
+            0,
+            0
+          );
+
+          reservationDate = tomorrow;
+          isReservation = true;
+
+          this.updateStage(
+            "publishing",
+            `티스토리 예약 발행 설정 중 (${tomorrow.toLocaleString()})...`
+          );
+        } else {
+          this.updateStage(
+            "publishing",
+            `티스토리 발행 중... (오늘 ${dailyUsage.tistoryCount + 1}번째)`
+          );
+        }
+
+        // Automation 호출 (예약 날짜 전달)
+        await this.automation.writePostFromHtmlFile(
+          filePath,
+          title,
+          category,
+          undefined,
+          reservationDate
+        );
+
+        results.push(isReservation ? "티스토리(예약)" : "티스토리");
+
+        // 즉시 발행 성공 시에만 카운트 증가
+        if (!isReservation) {
+          store.set("dailyUsage", {
+            ...dailyUsage,
+            tistoryCount: dailyUsage.tistoryCount + 1,
+          });
+        }
+      } catch (e: any) {
+        logger.error(`Tistory Publish Error: ${e.message}`);
+        errors.push(`티스토리 실패(${e.message})`);
+      }
+    } else {
+      logger.info("티스토리 발행이 비활성화되어 건너뜁니다.");
+    }
+
+    // 3. 네이버 발행 (선택 여부 확인)
+    // TODO: 네이버 블로그 발행 기능 구현 예정
+    if (settings.naverEnabled && settings.naverBlogId) {
+      logger.info("네이버 블로그 발행 기능은 아직 구현되지 않았습니다.");
+      /*
+      try {
+        this.updateStage("publishing", `네이버 블로그 발행 중...`);
+
+        // 네이버 로그인 확인
+        // await this.automation.loginNaver();
+
+        // 본문 내용만 추출
+        const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+        const bodyContent = bodyMatch ? bodyMatch[1].trim() : htmlContent;
+
+        // await this.automation.writeToNaver(title, bodyContent, category);
+        // results.push("네이버");
+      } catch (e: any) {
+        logger.error(`Naver Publish Error: ${e.message}`);
+        errors.push(`네이버 실패(${e.message})`);
+      }
+      */
+    }
+
+    // 결과 처리
+    if (results.length > 0) {
+      const successMsg = `${results.join(", ")} 완료!`;
+      const errorMsg = errors.length > 0 ? ` (오류: ${errors.join(", ")})` : "";
+      logger.info(`Job Finished: ${successMsg}${errorMsg}`);
+      // 하나라도 성공하면 파일은 발행된 것으로 처리
+      const fileManager = new FileManager();
+      fileManager.markPostAsPublished(filePath);
+    } else if (
+      !settings.tistoryEnabled &&
+      (!settings.naverEnabled || !settings.naverBlogId)
+    ) {
+      throw new Error("활성화된 발행 플랫폼이 없습니다. 설정을 확인해주세요.");
+    } else {
+      throw new Error(`모든 플랫폼 발행 실패: ${errors.join(", ")}`);
+    }
+  }
+
+  /**
    * RSS 발행 작업 실행
    */
   private async executeRssPublishJob(job: Job): Promise<void> {
@@ -298,7 +445,15 @@ export class SchedulerService {
     const fileManager = new FileManager();
 
     const feedLink = job.data.rssLink;
-    const feedItem = job.data.feedItem;
+    let feedItem = job.data.feedItem;
+
+    // [안전장치] feedItem의 link가 누락된 경우 rssLink로 복구
+    if (feedItem && !feedItem.link && feedLink) {
+      logger.warn(
+        `RSS Job ${job.id}: feedItem.link is missing, using rssLink.`
+      );
+      feedItem = { ...feedItem, link: feedLink };
+    }
 
     this.updateStage("generating-content", `RSS 발행: "${feedItem.title}"`);
 
@@ -359,17 +514,19 @@ export class SchedulerService {
       "html"
     );
 
-    // 6. 발행
-    this.updateStage(
-      "publishing",
-      `"${title}" 발행 시도 (${determinedCategory})...`
-    );
-    await this.automation.writePostFromHtmlFile(
+    // 6. [변경] 다중 플랫폼 발행 호출
+    await this.publishToPlatforms(
       filePath,
       title,
-      determinedCategory
+      determinedCategory,
+      finalContent
     );
-    fileManager.markPostAsPublished(filePath);
+
+    // [NEW] 발행 성공 시 원본 링크를 히스토리에 저장
+    if (feedLink) {
+      addToPublishedHistory(feedLink);
+      logger.info(`Link added to history: ${feedLink}`);
+    }
   }
 
   /**
@@ -427,6 +584,7 @@ export class SchedulerService {
       title: material.title,
       source: sourceName,
       contentSnippet: contentToAnalyze.substring(0, 500),
+      link: material.type === "link" ? material.value : undefined, // 링크 타입 소재의 경우 링크 포함
     };
 
     const { title, content, imageKeyword } = await aiService.generatePost(
@@ -476,17 +634,18 @@ export class SchedulerService {
       "html"
     );
 
-    // 7. 발행
-    this.updateStage(
-      "publishing",
-      `"${title}" 발행 시도 (${determinedCategory})...`
-    );
-    await this.automation.writePostFromHtmlFile(
+    // 7. [변경] 다중 플랫폼 발행 호출
+    await this.publishToPlatforms(
       filePath,
       title,
-      determinedCategory
+      determinedCategory,
+      finalContent
     );
-    fileManager.markPostAsPublished(filePath);
+
+    // [NEW] 소재가 링크 타입이면 히스토리에 저장
+    if (material && material.type === "link") {
+      addToPublishedHistory(material.value);
+    }
 
     // 8. 성공 시 소재 리스트에서 제거
     const currentMaterials = store.get("materials") || [];
@@ -801,13 +960,15 @@ export class SchedulerService {
         "publishing",
         `글을 발행하는 중... (${determinedCategory})`
       );
-      await this.automation.writePostFromHtmlFile(
+
+      // [변경] 다중 플랫폼 발행 호출
+      // publishToPlatforms를 호출하되, 여기서는 fileManager.markPostAsPublished가 내부적으로 호출됨
+      await this.publishToPlatforms(
         filePath,
         title,
-        determinedCategory
+        determinedCategory,
+        finalContent
       );
-
-      fileManager.markPostAsPublished(filePath);
 
       const schedulerConfig = store.get("scheduler");
       store.set("scheduler", {
