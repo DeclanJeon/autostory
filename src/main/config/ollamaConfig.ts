@@ -59,7 +59,7 @@ export const getLatestOllamaVersion = async (): Promise<string> => {
       "https://api.github.com/repos/ollama/ollama/releases/latest",
       {
         headers: {
-          "User-Agent": "AutoTistory-AI-Writer",
+          "User-Agent": "AutoStory-AI-Writer",
         },
       }
     );

@@ -85,6 +85,11 @@ export interface Settings {
   targetLanguage?: string;
   unsplashAccessKey?: string;
   pexelsApiKey?: string;
+  // [NEW] 네이버 블로그 설정
+  naverBlogId: string;
+  naverEnabled: boolean;
+  // [NEW] 티스토리 블로그 설정
+  tistoryEnabled: boolean;
 }
 
 export interface PromptHistory {
@@ -421,6 +426,39 @@ declare global {
         category: string
       ) => Promise<{ success: boolean; error?: string }>;
 
+      // ============================================================
+      // [NEW] 네이버 관련 API
+      // ============================================================
+
+      /**
+       * 네이버 로그인
+       */
+      startNaverLogin: () => Promise<{
+        success: boolean;
+        state: "logged-in" | "logged-out" | "logging-in" | "unknown";
+        error?: string;
+      }>;
+
+      /**
+       * 다중 플랫폼 발행
+       */
+      publishPostMulti: (data: {
+        filePath: string;
+        platforms: string[]; // ['tistory', 'naver']
+        category: string;
+        tags?: string[];
+      }) => Promise<{
+        success: boolean;
+        results?: {
+          tistory: boolean;
+          naver: boolean;
+          reservation: boolean;
+          reservationDate: string | null;
+          errors: string[];
+        };
+        error?: string;
+      }>;
+
       // 이미지 테스트
       testImageSearch: (params: { text: string }) => Promise<{
         success: boolean;
@@ -524,6 +562,18 @@ declare global {
       ) => () => void;
 
       // ============================================================
+      // [NEW] 일일 통계 조회 API
+      // ============================================================
+
+      /**
+       * 일일 발행량 통계 조회
+       */
+      getDailyStats: () => Promise<{
+        tistoryCount: number;
+        lastResetDate: string;
+      }>;
+
+      // ============================================================
       // 소재 관리 API (신규)
       // ============================================================
       addMaterial: (data: {
@@ -537,6 +587,21 @@ declare global {
       getMaterials: () => Promise<MaterialItem[]>;
 
       deleteMaterial: (id: string) => Promise<{ success: boolean }>;
+
+      // ============================================================
+      // RSS 내보내기/불러오기 (신규)
+      // ============================================================
+      exportRssFeeds: (content: string) => Promise<{
+        success: boolean;
+        filePath?: string;
+        error?: string;
+      }>;
+
+      importRssFeeds: () => Promise<{
+        success: boolean;
+        content?: string;
+        error?: string;
+      }>;
 
       // ============================================================
       // 브라우저 다운로드

@@ -2,6 +2,16 @@ import Store from "electron-store";
 import { FeedItem } from "../services/RssService";
 
 /**
+ * [NEW] 플랫폼별 일일 사용량 구조
+ * 계정 ID(블로그 이름 또는 ID)를 Key로 사용하여 카운트를 격리 관리합니다.
+ */
+export interface DailyUsageStats {
+  lastResetDate: string; // YYYY-MM-DD (Local Time)
+  tistory: Record<string, number>; // { "blogName": count }
+  naver: Record<string, number>; // { "blogId": count }
+}
+
+/**
  * 소재 아이템 타입 정의
  */
 export interface MaterialItem {
@@ -68,11 +78,22 @@ interface UserSchema {
     targetLanguage: string;
     unsplashAccessKey?: string;
     pexelsApiKey?: string;
+    // [NEW] 네이버 설정
+    naverBlogId: string;
+    naverEnabled: boolean;
+    // [NEW] 티스토리 설정
+    tistoryEnabled: boolean;
   };
+
+  // [MODIFIED] 일일 사용량 (구조 변경됨)
+  dailyUsage: DailyUsageStats;
   auth: {
     cookies: any[];
     storageState?: any;
     lastLogin: number;
+    // [NEW] 네이버 인증 정보
+    naverCookies: any[];
+    naverLastLogin: number;
   };
   feedCache: {
     items: FeedItem[];
@@ -210,7 +231,7 @@ ${COMMON_STRUCTURE_RULES}
 `;
 
 // ============================================================
-// 페르소나 5종 정의
+// 페르소나 8종 정의 (기존 5종 + 신규 3종)
 // ============================================================
 const defaultPersonas: ExtendedTemplate[] = [
   {
@@ -461,10 +482,104 @@ ${COMMON_STRUCTURE_RULES}
     createdAt: Date.now(),
     updatedAt: Date.now(),
   },
+  {
+    id: "persona-sentimental-storyteller",
+    name: "감성 스토리텔러",
+    templateType: "persona",
+    category: "lifestyle",
+    tone: "casual",
+    tags: ["에세이", "일상", "가족", "감성", "일기", "대화", "따뜻함"],
+    isDefault: true,
+    priority: 95,
+    description:
+      "대화체와 독백을 섞어 소설처럼 몰입감 있는 일상을 그려내는 작가",
+    content: `
+# 페르소나: 감성 스토리텔러
+
+${COMMON_STRUCTURE_RULES}
+
+## 역할 정의
+당신은 평범한 일상 속에서 특별한 감동을 찾아내는 에세이 작가입니다. 
+정보 전달보다는 '상황 묘사'와 '인물 간의 대화'를 통해 독자를 이야기 속으로 끌어들입니다.
+
+## 핵심 말투 (Tone & Manner)
+- **대화체 필수:** 상황을 설명할 때 "[ 엄마, 밥 먹었어? ]" 처럼 대괄호를 사용해 대화문을 적극적으로 넣습니다.
+- **독백과 서사:** "~했다", "~였을까?" 같은 차분한 독백체와 생생한 구어체를 오갑니다.
+- **감각적 묘사:** "입에 쩌억쩌억 달라붙는", "야들야들 잘 삶아진" 처럼 오감을 자극하는 표현을 씁니다.
+
+## 글쓰기 규칙
+1. **에피소드 중심:** 추상적인 이야기 대신 구체적인 사건(Event)을 시간 순서대로 묘사합니다.
+2. **캐릭터 부여:** 등장인물(남편, 부모님)에게 애칭이나 성격을 부여해 입체감을 줍니다.
+3. **여운 있는 마무리:** 사실 나열로 끝내지 않고, 그날의 감정이나 깨달음으로 마무리를 짓습니다.
+    `,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  },
+  {
+    id: "persona-yeouido-analyst",
+    name: "여의도 애널리스트",
+    templateType: "persona",
+    category: "business",
+    tone: "analytical",
+    tags: ["주식", "투자", "분석", "종목", "전망", "차트", "재무"],
+    isDefault: true,
+    priority: 92,
+    description: "냉철한 시각으로 시장 데이터와 이슈를 분석하는 주식 전문가",
+    content: `
+# 페르소나: 여의도 애널리스트
+
+${COMMON_STRUCTURE_RULES}
+
+## 역할 정의
+당신은 15년 차 베테랑 주식 애널리스트입니다. '뉴스-재무-수급-차트' 4박자를 갖춰 투자자에게 실질적인 인사이트를 제공합니다.
+
+## 핵심 말투
+- **전문적이고 확신에 찬 어조:** "~로 판단됩니다", "~할 가능성이 높습니다", "~가 관건입니다".
+- **데이터 기반:** "많다/적다" 대신 "전년 대비 15% 증가", "PER 10배 수준" 등 수치를 제시합니다.
+- **강조:** 핵심 키워드나 수치는 볼드체(**)로 강조합니다.
+
+## 글쓰기 규칙
+1. **두괄식 구성:** 결론과 핵심 이슈를 최상단에 배치합니다.
+2. **구조적 분석:** 1.이슈 2.재무 3.차트 4.전망 순으로 섹션을 나눕니다.
+3. **전략 제시:** 단순 분석을 넘어 "분할 매수 유효", "비중 축소" 등 액션 플랜을 제안합니다.
+    `,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  },
+  {
+    id: "persona-honest-gourmet",
+    name: "솔직한 미식가",
+    templateType: "persona",
+    category: "review",
+    tone: "friendly",
+    tags: ["맛집", "리뷰", "내돈내산", "솔직후기", "먹방", "여행"],
+    isDefault: true,
+    priority: 88,
+    description: "광고 없는 솔직한 후기를 지향하며 맛의 디테일을 살리는 미식가",
+    content: `
+# 페르소나: 솔직한 미식가
+
+${COMMON_STRUCTURE_RULES}
+
+## 역할 정의
+당신은 협찬 없이 내 돈 주고 사 먹는(내돈내산) 솔직한 미식가입니다. 가게에 들어가는 순간부터 나오는 순간까지의 경험을 생생하게 전달합니다.
+
+## 핵심 말투
+- **친근한 옆집 언니/형 톤:** "자리에 앉자마자", "이건 좀 아쉽더라고요" 처럼 편안하게 씁니다.
+- **가감 없는 평가:** 맛있는 건 격하게 칭찬하고, 아쉬운 점은 솔직하게(비난 말고 비평) 씁니다.
+
+## 글쓰기 규칙
+1. **동선 중심 서술:** 방문 계기 -> 웨이팅 -> 입장 -> 메뉴판 -> 음식 맛 -> 총평 순으로 전개합니다.
+2. **디테일한 맛 묘사:** "맛있다"만 반복 금지. 식감, 향, 맵기 정도를 구체적으로 묘사합니다.
+3. **꿀팁 제공:** 주차 정보, 웨이팅 팁, 추천 메뉴 조합을 꼭 넣습니다.
+    `,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  },
 ];
 
 // ============================================================
-// 프롬프트 5종 정의
+// 프롬프트 10종 정의 (기존 5종 + 추가 5종 + 신규 3종)
 // ============================================================
 const defaultPrompts: ExtendedTemplate[] = [
   {
@@ -1034,6 +1149,150 @@ ${COMMON_STRUCTURE_RULES}
     createdAt: Date.now(),
     updatedAt: Date.now(),
   },
+  {
+    id: "prompt-daily-essay",
+    name: "일상 에세이 (드라마틱)",
+    templateType: "prompt",
+    category: "lifestyle",
+    tone: "casual",
+    tags: ["에세이", "가족", "일상", "감동", "스토리"],
+    isDefault: true,
+    priority: 95,
+    description:
+      "대화문과 구체적인 상황 묘사를 통해 영화 같은 일상을 기록합니다.",
+    content: `
+# 글쓰기 프롬프트: 일상 에세이
+
+${COMMON_STRUCTURE_RULES}
+
+## 목표
+독자가 글쓴이의 상황에 감정이입할 수 있도록, 한 편의 드라마처럼 생생한 일상을 기록합니다.
+
+## 필수 구성요소
+
+### 1. 배경 설정 (Scene Setting)
+- 언제, 어디서, 누구와 함께인지 자연스럽게 묘사합니다.
+- 그 날의 분위기, 날씨, 혹은 특별한 계기를 언급합니다.
+
+### 2. 에피소드 전개 (Episode)
+- **대화문 필수 포함:** 등장인물 간의 대화를 "[ ]" 안에 넣어 현장감을 살립니다.
+- 사건의 흐름을 시간 순서대로 자연스럽게 서술합니다.
+- 중간중간 글쓴이의 속마음(독백)을 섞어줍니다.
+
+### 3. 감각적 디테일 (Details)
+- 음식의 맛, 소리, 눈에 보이는 풍경 등을 구체적으로 묘사합니다.
+- 예: "황금빛으로 변한 들판", "입안 가득 퍼지는 고소함"
+
+### 4. 마무리 및 여운 (Ending)
+- 사건이 마무리된 후의 감정이나 깨달음을 정리합니다.
+- 독자에게 따뜻한 여운을 남기는 문장으로 끝맺습니다.
+
+## 이미지 태그
+[[IMAGE: 상황에 맞는 감성 사진]]
+[[IMAGE: 음식이나 장소 클로즈업]]
+    `,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  },
+  {
+    id: "prompt-stock-report",
+    name: "주식 종목 분석 리포트",
+    templateType: "prompt",
+    category: "business",
+    tone: "analytical",
+    tags: ["주식", "종목분석", "투자", "재테크", "리포트"],
+    isDefault: true,
+    priority: 92,
+    description:
+      "최신 뉴스, 재무, 차트, 수급을 종합하여 전문적인 투자 리포트를 작성합니다.",
+    content: `
+# 글쓰기 프롬프트: 주식 종목 분석
+
+${COMMON_STRUCTURE_RULES}
+
+## 목표
+투자자가 현명한 판단을 내릴 수 있도록 객관적인 데이터와 논리적인 전망을 제공합니다.
+
+## 필수 구성요소
+
+### 1. 헤드라인 & 요약
+- 종목명과 현재 가장 핫한 이슈를 결합한 매력적인 제목
+- 바쁜 독자를 위한 3줄 핵심 요약
+
+### 2. 최근 뉴스 및 이슈 (News & Issues)
+- 주가에 영향을 미친 최근 사건(호재/악재) 정리
+- 관련 뉴스나 공시 내용 분석
+
+### 3. 기업 개요 및 재무 (Overview & Financials)
+- 이 회사가 무엇으로 돈을 버는지(BM) 간단 요약
+- 매출액, 영업이익, 부채비율 등 핵심 재무지표 추세 분석 (표 활용 권장)
+
+### 4. 수급 및 차트 분석 (Technical)
+- 외국인/기관의 매매 동향
+- 주요 지지선 및 저항선 분석
+- 현재 주가의 위치(저평가/고평가)
+
+### 5. 투자 포인트 및 전망 (Outlook)
+- 향후 주가 상승 모멘텀 (일정, 수주 기대감 등)
+- **결론:** 매수/매도/관망 등 명확한 의견 제시 (단, 면책조항 포함)
+
+## 이미지 태그
+[[IMAGE: 주가 차트]]
+[[IMAGE: 관련 제품이나 기업 로고]]
+    `,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  },
+  {
+    id: "prompt-food-review",
+    name: "리얼 맛집 탐방기",
+    templateType: "prompt",
+    category: "review",
+    tone: "friendly",
+    tags: ["맛집", "먹방", "내돈내산", "솔직후기", "데이트"],
+    isDefault: true,
+    priority: 88,
+    description:
+      "방문 동기부터 맛 평가, 총평까지 이어지는 솔직하고 상세한 리뷰를 작성합니다.",
+    content: `
+# 글쓰기 프롬프트: 리얼 맛집 탐방기
+
+${COMMON_STRUCTURE_RULES}
+
+## 목표
+독자가 직접 방문한 것처럼 맛과 분위기를 생생하게 전달하고, 실질적인 방문 팁을 제공합니다.
+
+## 필수 구성요소
+
+### 1. 방문 동기 및 외관
+- 왜 이 식당을 가게 되었는지 (지나가다 우연히? 검색해서?)
+- 가게의 첫인상, 위치, 주차 편의성
+
+### 2. 메뉴 및 주문
+- 메뉴판 구성과 가격대
+- 주문한 메뉴와 그 이유
+
+### 3. 맛 평가 (Taste Review)
+- 메인 음식의 비주얼, 향, 식감, 맛 상세 묘사
+- 밑반찬(김치 등)에 대한 평가도 포함
+- 솔직한 장점과 아쉬운 점 언급
+
+### 4. 분위기 및 서비스
+- 매장 인테리어, 청결도, 직원 친절도
+- 혼밥 가능한지, 단체 모임에 좋은지 등
+
+### 5. 총평 및 정보 (Summary)
+- 재방문 의사 여부
+- 지도 정보, 영업시간, 브레이크 타임 등 필수 정보 요약
+
+## 이미지 태그
+[[IMAGE: 가게 외관]]
+[[IMAGE: 먹음직스러운 음식 근접샷]]
+[[IMAGE: 메뉴판]]
+    `,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  },
 ];
 
 // ============================================================
@@ -1066,6 +1325,17 @@ const allDefaultTemplates: ExtendedTemplate[] = [
 ];
 
 // ============================================================
+// 로컬 시간 기준 오늘 날짜 문자열 반환 (YYYY-MM-DD)
+// ============================================================
+const getLocalTodayDate = (): string => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+// ============================================================
 // Store 정의
 // ============================================================
 const store = new Store<UserSchema>({
@@ -1083,10 +1353,24 @@ const store = new Store<UserSchema>({
       targetLanguage: "Korean",
       unsplashAccessKey: "",
       pexelsApiKey: "",
+      // [NEW] 네이버 초기값
+      naverBlogId: "",
+      naverEnabled: false,
+      // [NEW] 티스토리 초기값
+      tistoryEnabled: true,
+    },
+    // [MODIFIED] 초기값 구조 변경
+    dailyUsage: {
+      lastResetDate: getLocalTodayDate(),
+      tistory: {},
+      naver: {},
     },
     auth: {
       cookies: [],
       lastLogin: 0,
+      // [NEW] 네이버 초기값
+      naverCookies: [],
+      naverLastLogin: 0,
     },
     feedCache: {
       items: [],
@@ -1117,54 +1401,192 @@ const store = new Store<UserSchema>({
 });
 
 // ============================================================
-// 마이그레이션 함수: 기존 템플릿에 templateType 추가
+// [NEW] UsageManager: 일일 사용량 관리 헬퍼
 // ============================================================
-export function migrateTemplates(): void {
-  const templates = store.get("templates") || [];
-  let needsMigration = false;
+export const UsageManager = {
+  /**
+   * 사용량 데이터 구조가 구버전이거나 날짜가 지났으면 초기화
+   */
+  ensureStructureAndDate: () => {
+    const today = getLocalTodayDate();
+    const usage = store.get("dailyUsage") as any;
 
-  const migratedTemplates = templates.map((template: any) => {
-    // 이미 templateType이 있으면 스킵
-    if (template.templateType) {
-      return template;
+    // 1. 구조 마이그레이션 (구버전 데이터 감지)
+    // 구버전은 tistoryCount(number)가 존재하거나 tistory(object)가 없음
+    if (typeof usage.tistoryCount === "number" || !usage.tistory) {
+      console.log("[UsageManager] Migrating legacy dailyUsage structure...");
+      store.set("dailyUsage", {
+        lastResetDate: today,
+        tistory: {},
+        naver: {},
+      });
+      return;
     }
 
-    needsMigration = true;
+    // 2. 날짜 변경 체크
+    if (usage.lastResetDate !== today) {
+      console.log(
+        `[UsageManager] Date changed (${usage.lastResetDate} -> ${today}). Resetting counts.`
+      );
+      store.set("dailyUsage", {
+        lastResetDate: today,
+        tistory: {}, // 모든 블로그 카운트 리셋
+        naver: {},
+      });
+    }
+  },
 
-    // 기존 템플릿은 layout으로 간주
+  /**
+   * 특정 플랫폼/ID의 현재 사용량 조회
+   */
+  getUsage: (platform: "tistory" | "naver", identifier: string): number => {
+    if (!identifier) return 0;
+    UsageManager.ensureStructureAndDate();
+
+    const usage = store.get("dailyUsage");
+    // 해당 ID의 기록이 없으면 0 반환
+    return usage[platform]?.[identifier] || 0;
+  },
+
+  /**
+   * 사용량 1 증가
+   */
+  incrementUsage: (platform: "tistory" | "naver", identifier: string): void => {
+    if (!identifier) return;
+    UsageManager.ensureStructureAndDate();
+
+    const usage = store.get("dailyUsage");
+    const currentMap = usage[platform] || {};
+    const currentCount = currentMap[identifier] || 0;
+
+    // 점 표기법을 사용하여 특정 키만 업데이트 (Deep merge issue 방지)
+    store.set(`dailyUsage.${platform}.${identifier}`, currentCount + 1);
+  },
+
+  /**
+   * 발행 가능 여부 확인
+   * Tistory: 15회, Naver: 100회
+   */
+  checkLimit: (platform: "tistory" | "naver", identifier: string): boolean => {
+    const limit = platform === "tistory" ? 15 : 100;
+    const current = UsageManager.getUsage(platform, identifier);
+    return current < limit;
+  },
+
+  /**
+   * 전체 통계 반환 (API 응답용)
+   */
+  getAllStats: () => {
+    UsageManager.ensureStructureAndDate();
+    return store.get("dailyUsage");
+  },
+};
+
+// ============================================================
+// 마이그레이션 함수: 템플릿 동기화 (Source of Truth 방식)
+// ============================================================
+export function migrateTemplates(): void {
+  const currentTemplates = store.get("templates") || [];
+
+  // ID를 기반으로 한 매핑 생성
+  const existingMap = new Map<string, ExtendedTemplate>();
+  for (const t of currentTemplates) {
+    existingMap.set(t.id, t);
+  }
+
+  let needsMigration = false;
+
+  // 1. 기본 템플릿 소스 (Source of Truth)
+  const canonicalTemplates = [
+    ...defaultPersonas,
+    ...defaultPrompts,
+    ...defaultLayouts,
+  ];
+
+  // 2. 병합 로직 (기존 템플릿 유지 + 기본 템플릿 강제 업데이트)
+  const mergedTemplates = [...currentTemplates];
+
+  for (const canonical of canonicalTemplates) {
+    const existing = existingMap.get(canonical.id);
+
+    if (existing) {
+      // [규칙] 기본 템플릿(ID 매칭됨)은 항상 최신 소스로 덮어씁웁니다.
+      // 사용자가 기본 템플릿을 수정했더라도, 앱 업데이트 시 초기화되는 것이 보통입니다.
+      // 단, isDefault가 false인 사용자 정의 템플릿은 유지해야 합니다.
+      if (existing.isDefault !== false) {
+        // 기본 템플릿 업데이트
+        const index = mergedTemplates.findIndex((t) => t.id === canonical.id);
+        if (index !== -1) {
+          mergedTemplates[index] = canonical;
+          needsMigration = true;
+        }
+      }
+    } else {
+      // 기본 템플릿이 누락된 경우 추가
+      mergedTemplates.push(canonical);
+      needsMigration = true;
+    }
+  }
+
+  // 3. ID 중복 제거 (안전장치)
+  const uniqueTemplates = Array.from(
+    new Map(mergedTemplates.map((t) => [t.id, t])).values()
+  );
+
+  // 4. 구조 업데이트 (templateType 누락 방지)
+  const finalTemplates = uniqueTemplates.map((t) => {
+    // 이미 templateType이 있으면 그대로 유지
+    if (t.templateType) {
+      return {
+        ...t,
+        updatedAt: Date.now(), // 최신 업데이트 시간 갱신
+      };
+    }
+
+    // 구형 데이터 마이그레이션
     return {
-      ...template,
+      ...t,
       templateType: "layout" as TemplateType,
-      category: "general" as TemplateCategory,
-      isDefault: template.id === "default-power-blogger",
-      priority: 50,
-      createdAt: template.createdAt || Date.now(),
+      category: (t.category as TemplateCategory) || "general",
+      isDefault: !!t.isDefault,
+      priority: t.priority || 50,
       updatedAt: Date.now(),
     };
   });
 
-  // 기본 페르소나와 프롬프트가 없으면 추가
-  const hasDefaultPersonas = migratedTemplates.some(
-    (t: any) => t.templateType === "persona" && t.isDefault
-  );
-  const hasDefaultPrompts = migratedTemplates.some(
-    (t: any) => t.templateType === "prompt" && t.isDefault
-  );
-
-  if (!hasDefaultPersonas) {
-    migratedTemplates.push(...defaultPersonas);
-    needsMigration = true;
-  }
-
-  if (!hasDefaultPrompts) {
-    migratedTemplates.push(...defaultPrompts);
-    needsMigration = true;
-  }
-
   if (needsMigration) {
-    store.set("templates", migratedTemplates);
-    console.log("Templates migrated successfully");
+    store.set("templates", finalTemplates);
+    console.log(
+      `Templates synced successfully (${finalTemplates.length} total)`
+    );
+  } else {
+    console.log("Templates are up to date.");
   }
 }
+
+// ============================================================
+// [NEW] 발행 이력 관리 헬퍼 함수
+// ============================================================
+
+/**
+ * 링크가 이미 발행되었는지 확인
+ */
+export const isLinkPublished = (link: string): boolean => {
+  const history = store.get("publishedHistory") || [];
+  return history.includes(link);
+};
+
+/**
+ * 링크를 발행 이력에 추가
+ */
+export const addToPublishedHistory = (link: string): void => {
+  if (!link) return;
+  const history = store.get("publishedHistory") || [];
+  if (!history.includes(link)) {
+    // 최신 1000개만 유지 (성능 관리)
+    const newHistory = [link, ...history].slice(0, 1000);
+    store.set("publishedHistory", newHistory);
+  }
+};
 
 export default store;

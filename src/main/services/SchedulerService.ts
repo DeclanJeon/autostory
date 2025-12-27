@@ -3,7 +3,11 @@ import { AiService } from "./AiService";
 import { FileManager } from "./FileManager";
 import { AutomationService, LoginResult } from "./AutomationService";
 import { logger, sendLogToRenderer } from "../utils/logger";
-import store, { MaterialItem, addToPublishedHistory } from "../config/store";
+import store, {
+  MaterialItem,
+  addToPublishedHistory,
+  UsageManager,
+} from "../config/store";
 import { powerSaveBlocker } from "electron";
 import { jobQueue, Job, JobType } from "./JobQueueService";
 
@@ -48,7 +52,6 @@ export class SchedulerService {
   private powerBlockerId: number | null = null;
   private automation: AutomationService;
   private currentJobId: string | null = null;
-  private TISTORY_LIMIT = 15;
 
   constructor(window: any) {
     this.mainWindow = window;
@@ -291,31 +294,7 @@ export class SchedulerService {
   }
 
   /**
-   * [NEW] 일일 발행량 리셋 체크
-   */
-  private checkAndResetDailyUsage() {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-    const localToday = `${year}-${month}-${day}`;
-
-    const usage = store.get("dailyUsage");
-
-    // 날짜가 변경되었으면 카운트 리셋
-    if (usage.lastResetDate !== localToday) {
-      logger.info(
-        `📅 날짜 변경 감지 (${usage.lastResetDate} -> ${localToday}). 발행량 초기화.`
-      );
-      store.set("dailyUsage", {
-        tistoryCount: 0,
-        lastResetDate: localToday,
-      });
-    }
-  }
-
-  /**
-   * [UPDATED] 공통 발행 로직 (티스토리 일일 제한 체크 포함)
+   * [MODIFIED] 플랫폼 발행 로직 (UsageManager 적용)
    */
   private async publishToPlatforms(
     filePath: string,
@@ -323,116 +302,123 @@ export class SchedulerService {
     category: string,
     htmlContent: string
   ): Promise<void> {
-    // 1. 발행 시작 전 사용량 체크 및 리셋
-    this.checkAndResetDailyUsage();
+    // 1. 날짜 체크 및 구조 초기화
+    UsageManager.ensureStructureAndDate();
 
     const settings = store.get("settings");
-    const dailyUsage = store.get("dailyUsage");
     const results: string[] = [];
     const errors: string[] = [];
 
-    // 2. 티스토리 발행 (선택 여부 확인)
+    // 2. 티스토리 발행
     if (settings.tistoryEnabled) {
-      try {
-        let reservationDate: Date | undefined = undefined;
-        let isReservation = false;
+      const tistoryId = settings.blogName;
+      if (tistoryId) {
+        try {
+          let reservationDate: Date | undefined = undefined;
+          let isReservation = false;
 
-        // 발행량 제한 체크
-        if (dailyUsage.tistoryCount >= this.TISTORY_LIMIT) {
-          logger.info(
-            `🛑 티스토리 일일 발행량 초과 (${dailyUsage.tistoryCount}/${this.TISTORY_LIMIT}). 예약 발행으로 전환.`
+          // [CHECK] 한도 체크
+          const canPublishNow = UsageManager.checkLimit("tistory", tistoryId);
+          const currentCount = UsageManager.getUsage("tistory", tistoryId);
+
+          if (!canPublishNow) {
+            logger.info(
+              `Tistory 한도 초과 (${currentCount}/15). 예약 발행 전환.`
+            );
+
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            tomorrow.setHours(
+              7 + Math.floor(Math.random() * 4),
+              Math.floor(Math.random() * 60),
+              0,
+              0
+            );
+
+            reservationDate = tomorrow;
+            isReservation = true;
+
+            this.updateStage(
+              "publishing",
+              `티스토리 예약 발행 중 (${tomorrow.toLocaleString()})...`
+            );
+          } else {
+            this.updateStage(
+              "publishing",
+              `티스토리 발행 중... (금일 ${currentCount + 1}번째)`
+            );
+          }
+
+          await this.automation.writePostFromHtmlFile(
+            filePath,
+            title,
+            category,
+            undefined,
+            reservationDate
           );
 
-          // 내일 날짜 설정
-          const tomorrow = new Date();
-          tomorrow.setDate(tomorrow.getDate() + 1);
-          // 시간 분산: 오전 7시 ~ 10시 사이 랜덤
-          tomorrow.setHours(
-            7 + Math.floor(Math.random() * 4),
-            Math.floor(Math.random() * 60),
-            0,
-            0
-          );
+          results.push(isReservation ? "Tistory(예약)" : "Tistory");
 
-          reservationDate = tomorrow;
-          isReservation = true;
-
-          this.updateStage(
-            "publishing",
-            `티스토리 예약 발행 설정 중 (${tomorrow.toLocaleString()})...`
-          );
-        } else {
-          this.updateStage(
-            "publishing",
-            `티스토리 발행 중... (오늘 ${dailyUsage.tistoryCount + 1}번째)`
-          );
+          // [INCREMENT] 즉시 발행 시 카운트 증가
+          if (!isReservation) {
+            UsageManager.incrementUsage("tistory", tistoryId);
+          }
+        } catch (e: any) {
+          logger.error(`Tistory Publish Error: ${e.message}`);
+          errors.push(`Tistory(${e.message})`);
         }
-
-        // Automation 호출 (예약 날짜 전달)
-        await this.automation.writePostFromHtmlFile(
-          filePath,
-          title,
-          category,
-          undefined,
-          reservationDate
-        );
-
-        results.push(isReservation ? "티스토리(예약)" : "티스토리");
-
-        // 즉시 발행 성공 시에만 카운트 증가
-        if (!isReservation) {
-          store.set("dailyUsage", {
-            ...dailyUsage,
-            tistoryCount: dailyUsage.tistoryCount + 1,
-          });
-        }
-      } catch (e: any) {
-        logger.error(`Tistory Publish Error: ${e.message}`);
-        errors.push(`티스토리 실패(${e.message})`);
+      } else {
+        logger.warn("Tistory 블로그 이름이 설정되지 않아 스킵합니다.");
       }
-    } else {
-      logger.info("티스토리 발행이 비활성화되어 건너뜁니다.");
     }
 
-    // 3. 네이버 발행 (선택 여부 확인)
-    // TODO: 네이버 블로그 발행 기능 구현 예정
+    // 3. 네이버 발행
     if (settings.naverEnabled && settings.naverBlogId) {
-      logger.info("네이버 블로그 발행 기능은 아직 구현되지 않았습니다.");
-      /*
+      const naverId = settings.naverBlogId;
       try {
-        this.updateStage("publishing", `네이버 블로그 발행 중...`);
+        // [CHECK] 한도 체크
+        if (!UsageManager.checkLimit("naver", naverId)) {
+          const currentCount = UsageManager.getUsage("naver", naverId);
+          throw new Error(`일일 한도 초과 (${currentCount}/100)`);
+        }
 
-        // 네이버 로그인 확인
-        // await this.automation.loginNaver();
+        this.updateStage("publishing", `네이버 발행 중...`);
 
-        // 본문 내용만 추출
         const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
         const bodyContent = bodyMatch ? bodyMatch[1].trim() : htmlContent;
 
-        // await this.automation.writeToNaver(title, bodyContent, category);
-        // results.push("네이버");
+        await this.automation.writeToNaver(
+          naverId,
+          title,
+          bodyContent,
+          category
+        );
+
+        // [INCREMENT] 카운트 증가
+        UsageManager.incrementUsage("naver", naverId);
+
+        results.push("Naver");
       } catch (e: any) {
         logger.error(`Naver Publish Error: ${e.message}`);
-        errors.push(`네이버 실패(${e.message})`);
+        errors.push(`Naver(${e.message})`);
       }
-      */
     }
 
     // 결과 처리
     if (results.length > 0) {
-      const successMsg = `${results.join(", ")} 완료!`;
-      const errorMsg = errors.length > 0 ? ` (오류: ${errors.join(", ")})` : "";
+      const successMsg = `${results.join(", ")} 발행 성공!`;
+      const errorMsg = errors.length > 0 ? ` (실패: ${errors.join(", ")})` : "";
       logger.info(`Job Finished: ${successMsg}${errorMsg}`);
-      // 하나라도 성공하면 파일은 발행된 것으로 처리
+
       const fileManager = new FileManager();
       fileManager.markPostAsPublished(filePath);
     } else if (
-      !settings.tistoryEnabled &&
+      (!settings.tistoryEnabled || !settings.blogName) &&
       (!settings.naverEnabled || !settings.naverBlogId)
     ) {
-      throw new Error("활성화된 발행 플랫폼이 없습니다. 설정을 확인해주세요.");
+      throw new Error("활성화된 발행 대상이 없습니다. 설정을 확인해주세요.");
     } else {
-      throw new Error(`모든 플랫폼 발행 실패: ${errors.join(", ")}`);
+      throw new Error(`모든 발행 실패: ${errors.join(", ")}`);
     }
   }
 

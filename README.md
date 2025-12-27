@@ -1,6 +1,6 @@
-# AutoTistory AI Writer v1.0
+# AutoStory AI Writer v1.0
 
-AI 기반 티스토리 콘텐츠 자동 생성 및 발행 도구
+AI 기반 블로그 콘텐츠 자동 생성 및 발행 도구
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
@@ -20,7 +20,7 @@ AI 기반 티스토리 콘텐츠 자동 생성 및 발행 도구
 
 ## 🎯 프로젝트 개요
 
-AutoTistory AI Writer는 AI 기술을 활용하여 티스토리 블로그 콘텐츠를 자동으로 생성하고 발행하는 통합 솔루션입니다. RSS 피드를 통한 콘텐츠 수집, AI 기반 콘텐츠 생성, 템플릿 관리, 예약 발행 등의 기능을 제공하여 블로거들의 생산성을 극대화합니다.
+AutoStory AI Writer는 AI 기술을 활용하여 블로그 콘텐츠를 자동으로 생성하고 발행하는 통합 솔루션입니다. RSS 피드를 통한 콘텐츠 수집, AI 기반 콘텐츠 생성, 템플릿 관리, 예약 발행 등의 기능을 제공하여 블로거들의 생산성을 극대화합니다.
 
 ### 핵심 가치
 
@@ -447,6 +447,6 @@ sudo apt-get install xdg-utils libxss1
 ---
 
 <div align="center">
-  <p>AutoTistory AI Writer v1.0 - AI 기반 티스토리 콘텐츠 자동 생성 및 발행 도구</p>
+  <p>AutoStory AI Writer v1.0 - AI 기반 블로그 콘텐츠 자동 생성 및 발행 도구</p>
   <p>Made with ❤️ by AutoStory Team</p>
 </div>

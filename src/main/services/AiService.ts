@@ -82,6 +82,40 @@ const KEY_POINT_BOX_TEMPLATE = `
 `;
 
 /**
+ * [NEW] 출처 섹션 HTML 템플릿 (가시성 강화)
+ */
+const REFERENCE_BOX_TEMPLATE = `
+<div class="reference-section" style="margin-top: 50px; padding: 20px; background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 12px; font-family: sans-serif;">
+  <h3 style="margin: 0 0 12px 0; font-size: 1.1em; font-weight: 700; color: #343a40; border-left: 4px solid #6c5ce7; padding-left: 10px;">📚 출처 및 참고자료</h3>
+  <ul style="list-style: none; padding: 0; margin: 0;">
+    {{LINKS}}
+  </ul>
+</div>
+`;
+
+/**
+ * [NEW] AI에게 출처 작성 금지 지시
+ */
+const NO_REF_INSTRUCTION = `
+[중요 제약사항]
+1. 본문 내에 '참고자료', '출처', 'Reference' 섹션을 절대 직접 작성하지 마세요. (시스템이 자동으로 추가합니다)
+2. 오직 본문 내용 작성에만 집중하세요.
+`;
+
+/**
+ * [FIXED] 제목 생성 절대 규칙 - 예시 제거 및 후킹 강조
+ */
+const TITLE_CONSTRAINT = `
+[제목(title) 작성 절대 규칙]
+1. 분석한 **본문 내용을 관통하는 가장 매력적이고 자극적인(Click-bait) 제목**을 작성하세요.
+2. "제목:", "Title:", "**", 따옴표("), 마크다운(#) 등 불필요한 기호를 절대 포함하지 마세요.
+3. 예시 텍스트를 그대로 베끼지 말고, **반드시 입력된 글감을 바탕으로 새로 창작하세요.**
+4. 제목은 30자 이내로 간결하게 작성하세요.
+5. 나쁜 예: "맛있는 사과", "제목 없음", "블로그 글"
+6. 좋은 예: "연봉 1억 개발자가 되는 3가지 비밀", "지금 당장 애플 주식을 사야 하는 이유"
+`;
+
+/**
  * AI 서비스 클래스
  * 콘텐츠 생성, 템플릿 최적화, 자동 매칭 등 담당
  */
@@ -93,34 +127,55 @@ export class AiService {
   }
 
   // ============================================================
-  // [신규] 제목 정제 헬퍼 메서드
+  // [UPGRADED] 제목 정제 헬퍼 메서드 (강화됨)
   // ============================================================
 
   /**
-   * [FIX] 제목 정제 헬퍼 함수
-   * HTML 태그 제거, 마크다운 제거, 따옴표 제거, DOCTYPE 체크
-   * @param rawTitle - 원본 제목 문자열
+   * [UPGRADED] 제목 정제 헬퍼 함수
+   * AI가 뱉어내는 온갖 잡다한 기호와 형식을 강력하게 세탁합니다.
+   * @param rawTitle 원본 제목 문자열
    * @returns 정제된 제목
    */
   private cleanTitle(rawTitle: string): string {
-    if (!rawTitle) return "";
+    if (!rawTitle) return "제목 없음";
 
     let title = rawTitle;
 
-    // 1. HTML 태그 제거 (<strong>, <h1> 등)
+    // 1. 접두어/접미어 제거 (Title:, 제목:, Subject: 등)
+    // 예: "**Title: 멋진 제목**" -> "멋진 제목"
+    title = title
+      .replace(/^(Title|제목|Subject|Headline)\s*[:\-]\s*/i, "") // 영문/한글 접두어 제거
+      .replace(/^["']|["']$/g, "") // 앞뒤 따옴표 제거
+      .replace(/^\*\*|\*\*$/g, "") // 앞뒤 볼드 마크다운 제거
+      .replace(/^\[|\]$/g, ""); // 앞뒤 대괄호 제거
+
+    // 2. HTML 태그 제거
     title = title.replace(/<[^>]*>/g, "");
 
-    // 2. 마크다운 제거 (**, #, [, ])
+    // 3. 마크다운 문법 제거 (본문 중간에 섞인 것들)
     title = title
-      .replace(/\*\*/g, "") // Bold
-      .replace(/^#+\s*/, "") // Header
-      .replace(/\[|\]/g, ""); // Brackets
+      .replace(/\*\*/g, "") // 중간 볼드
+      .replace(/__/g, "") // 중간 이탤릭
+      .replace(/^#+\s*/, "") // 헤딩 샵(#)
+      .replace(/`{1,3}/g, ""); // 코드 블록
 
-    // 3. 따옴표 및 불필요한 공백 제거
-    title = title.replace(/^["']|["']$/g, "").trim();
+    // 4. 따옴표 및 특수문자 정리
+    title = title
+      .replace(/^["']|["']$/g, "") // 앞뒤 따옴표
+      .replace(/"/g, '"')
+      .replace(/&/g, "&")
+      .replace(/</g, "<")
+      .replace(/>/g, ">")
+      .replace(/\\n/g, " ") // 줄바꿈을 공백으로
+      .trim();
 
-    // 4. 시스템 문자열(DOCTYPE 등)이 제목이 된 경우 방지
-    if (/^<!DOCTYPE/i.test(title) || /^<html/i.test(title)) {
+    // 5. DOCTYPE이나 HTML 코드가 제목으로 들어간 경우 방지
+    if (
+      /^<!DOCTYPE/i.test(title) ||
+      /^<html/i.test(title) ||
+      title.length > 100
+    ) {
+      // 제목이라기엔 너무 길거나 코드로 의심되면 빈 문자열 반환 (이후 로직에서 본문 추출 시도)
       return "";
     }
 
@@ -619,29 +674,23 @@ ${
 [이번 편 원본 콘텐츠]
 ${chunk}
 
-[필수 응답 형식 - JSON]
-반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트를 추가하지 마세요.
-{
-  "title": "이번 편의 핵심을 담은 짧은 제목 (10자 이내, 편수 제외)",
-  "subtitle": "이번 편의 핵심 키워드 소제목 (예: '기초 개념', 'API 활용', '실전 적용')",
-  "summary": "이번 편 내용 1-2문장 요약",
-  "content": "HTML 형식 본문 (1500자 이상, <h2>, <h3>, <p>, <strong> 태그 사용)",
-  "imageKeyword": "대표 이미지 검색 키워드 (영어 권장)"
-}
+[글 작성 지침 - 중요]
+1. **소제목(subtitle)**: 이번 편의 핵심 주제를 15자 이내의 명사형으로 작성 (예: "환경 설정", "기본 문법 익히기", "실전 프로젝트")
+2. **본문**: HTML 형식으로 작성하고, JSON 코드나 마크다운 문법을 절대 포함하지 마세요.
+3. 편 번호나 시리즈명을 본문에 포함하지 마세요.
 
-[소제목(subtitle) 작성 규칙 - 매우 중요]
-1. 이번 편의 핵심 주제를 명확하고 간결하게 표현
-2. 반드시 15자 이내
-3. 명사형 또는 "~하기" 형태 사용
-4. 예시: "환경 설정", "기본 문법 익히기", "실전 프로젝트", "성능 최적화"
-5. 편 번호(1편, 2편)나 시리즈명(${metadata.title})은 절대 포함하지 마세요
-6. "본문", "내용", "소개" 같은 일반적인 단어 피하기
+[출력 형식]
+아래 구조를 따라 HTML로만 작성하세요:
+
+<h2>이번 편 핵심 제목</h2>
+<p>본문 내용... (최소 1500자, <h2>, <h3>, <p>, <strong> 태그 사용)</p>
         `;
 
         const virtualIssue = {
           title: `${metadata.title} (Part ${partNum})`,
           source: "Uploaded File",
           contentSnippet: chunk.substring(0, 200),
+          link: `file://${metadata.title}`, // 파일 업로드 소재의 링크 추가
         };
 
         // AI 콘텐츠 생성
@@ -1135,6 +1184,10 @@ ${promptContent}
 
 ${BLOG_STRUCTURE_RULES}
 
+${NO_REF_INSTRUCTION}
+
+${TITLE_CONSTRAINT}
+
 # 추가 지시사항
 
 1. **언어**: 반드시 **${targetLanguage}**로 작성하세요.
@@ -1156,13 +1209,16 @@ ${BLOG_STRUCTURE_RULES}
   <p style="margin: 10px 0 0 0; font-size: 1.05em; color: #2d3436; line-height: 1.7;">[핵심 내용]</p>
 </div>
 
-[출력 형식 - JSON]
-{
-  "title": "SEO 최적화된 제목",
-  "summary": "전체 글 요약 (1-2문장)",
-  "content": "HTML 형식의 본문 (최소 1500자)",
-  "imageKeyword": "대표 이미지 검색 키워드"
-}
+[중요: 금지사항]
+- JSON 코드나 마크다운 문법을 본문에 절대 포함하지 마세요.
+- HTML 태그만 사용하여 콘텐츠를 작성하세요.
+
+[출력 형식]
+아래 구조를 따라 HTML로만 작성하세요:
+
+<h2>후킹한 제목</h2>
+<p>전체 글 요약 (1-2문장)</p>
+<p>본문 내용... (최소 1500자)</p>
 
 [사용자 추가 지시]
 ${instructions}
@@ -1181,6 +1237,8 @@ ${instructions}
 주어진 소재를 바탕으로 깊이 있는 분석 글을 작성하세요.
 
 ${BLOG_STRUCTURE_RULES}
+
+${NO_REF_INSTRUCTION}
 
 [출력 형식 - 엄격히 준수]
 1. **언어**: 모든 콘텐츠를 반드시 **${targetLanguage}**로 작성하세요.
@@ -1207,13 +1265,16 @@ ${BLOG_STRUCTURE_RULES}
 
 5. **이미지 위치**: \`[[IMAGE: 키워드]]\` 형식으로 2-3개 배치
 
-[출력 형식 - JSON]
-{
-  "title": "매력적이고 SEO 최적화된 제목 (한국어)",
-  "summary": "전체 글의 핵심을 한 문장으로 요약 (한국어)",
-  "content": "완전한 HTML 본문 (모든 스타일 인라인, 최소 1500자)",
-  "imageKeyword": "대표 이미지 검색용 영문 키워드"
-}
+[중요: 금지사항]
+- JSON 코드나 마크다운 문법을 본문에 절대 포함하지 마세요.
+- HTML 태그만 사용하여 콘텐츠를 작성하세요.
+
+[출력 형식]
+아래 구조를 따라 HTML로만 작성하세요:
+
+<h2>후킹한 제목</h2>
+<p>전체 글의 핵심을 한 문장으로 요약</p>
+<p>완전한 HTML 본문 (모든 스타일 인라인, 최소 1500자)</p>
 
 [사용자 지시사항]
 ${instructions}
@@ -1232,6 +1293,8 @@ ${instructions}
 
 ${BLOG_STRUCTURE_RULES}
 
+${NO_REF_INSTRUCTION}
+
 [출력 형식 - 엄격히 준수]
 1. **언어**: 모든 콘텐츠를 반드시 **${targetLanguage}**로 작성하세요.
 
@@ -1248,13 +1311,16 @@ ${BLOG_STRUCTURE_RULES}
 
 4. **이미지 위치**: \`[[IMAGE: 키워드]]\` 형식으로 2-3개 배치
 
-[출력 형식 - JSON]
-{
-  "title": "제목",
-  "summary": "한 줄 요약",
-  "content": "HTML 본문 (최소 1500자, 모든 스타일 인라인)",
-  "imageKeyword": "이미지 검색 키워드"
-}
+[중요: 금지사항]
+- JSON 코드나 마크다운 문법을 본문에 절대 포함하지 마세요.
+- HTML 태그만 사용하여 콘텐츠를 작성하세요.
+
+[출력 형식]
+아래 구조를 따라 HTML로만 작성하세요:
+
+<h2>후킹한 제목</h2>
+<p>한 줄 요약</p>
+<p>HTML 본문 (최소 1500자, 모든 스타일 인라인)</p>
 
 [적용할 템플릿]
 ${templateContent}
@@ -1377,6 +1443,25 @@ ${contextText}
       // [FIX] 제목 정제 로직 강화 (cleanTitle 함수 사용)
       parseResult.title = this.cleanTitle(parseResult.title);
 
+      // [FIX] 제목이 "맛있는 사과" 또는 "제목 없음"인 경우 본문 기반 재설정
+      if (
+        parseResult.title === "맛있는 사과" ||
+        parseResult.title === "제목 없음"
+      ) {
+        logger.warn("AI가 잘못된 제목을 생성하여 본문 기반으로 재설정합니다.");
+
+        // 본문의 첫 번째 H2 태그나 첫 문장을 제목으로 사용
+        const match =
+          parseResult.content.match(/<h2[^>]*>(.*?)<\/h2>/) ||
+          parseResult.content.match(/<p>(.*?)<\/p>/);
+        if (match && match[1]) {
+          parseResult.title = match[1].replace(/<[^>]*>/g, "").substring(0, 50);
+        } else {
+          // 소재 제목 활용
+          parseResult.title = selectedIssues[0]?.title || "블로그 포스트";
+        }
+      }
+
       // [FIX] 제목이 없거나 유효하지 않을 때 본문에서 추출하는 로직 개선
       if (!parseResult.title && parseResult.content.length > 0) {
         // 본문을 줄 단위로 나누어 유효한 텍스트가 나올 때까지 탐색
@@ -1423,33 +1508,65 @@ ${contextText}
         parseResult.content = summaryHtml + parseResult.content;
       }
 
-      // [NEW] 출처(Reference) 섹션 추가
+      // ============================================================
+      // [강화된 로직] 출처(Reference) 섹션 강제 주입 (가장 마지막 단계)
+      // ============================================================
       if (selectedIssues && selectedIssues.length > 0) {
-        let referenceHtml = `
-<div class="reference-section" style="margin-top: 60px; padding-top: 30px; border-top: 1px solid #eee;">
-  <h3 style="font-size: 1.2em; color: #555; margin-bottom: 15px;">출처</h3>
-  <ul style="list-style-type: disc; margin-left: 20px; color: #666; font-size: 0.95em;">
-`;
-
+        let linksHtml = "";
         const uniqueLinks = new Set<string>();
 
         for (const issue of selectedIssues) {
-          if (issue.link && !uniqueLinks.has(issue.link)) {
-            uniqueLinks.add(issue.link);
-            const sourceName = issue.source || "News";
-            const title = issue.title || "기사 원문";
-            // 링크 텍스트가 너무 길면 자르기
+          // [데이터 방어] 가능한 모든 필드에서 링크 탐색
+          const rawLink =
+            issue.link || issue.url || issue.originLink || issue.guid;
+
+          if (
+            rawLink &&
+            typeof rawLink === "string" &&
+            rawLink.startsWith("http")
+          ) {
+            // 중복 방지
+            if (uniqueLinks.has(rawLink)) continue;
+            uniqueLinks.add(rawLink);
+
+            const sourceName = issue.source || "Web Source";
+            const title = issue.title || "원문 보기";
+            // 제목 길이 제한
             const displayTitle =
               title.length > 50 ? title.substring(0, 50) + "..." : title;
 
-            referenceHtml += `    <li style="margin-bottom: 8px;"><a href="${issue.link}" target="_blank" rel="noopener noreferrer" style="color: #666; text-decoration: none; border-bottom: 1px solid #ddd;">${sourceName}: ${displayTitle}</a></li>\n`;
+            linksHtml += `
+    <li style="margin-bottom: 10px; display: flex; align-items: start;">
+      <span style="margin-right: 8px;">🔗</span>
+      <div>
+        <span style="font-weight: 700; color: #495057; font-size: 0.9em; margin-right: 6px;">[${sourceName}]</span>
+        <a href="${rawLink}" target="_blank" rel="noopener noreferrer" style="color: #339af0; text-decoration: none; border-bottom: 1px solid transparent; transition: all 0.2s; font-size: 0.95em;">
+          ${displayTitle}
+        </a>
+      </div>
+    </li>`;
           }
         }
 
-        referenceHtml += `  </ul>\n</div>`;
+        // 유효한 링크가 하나라도 있으면 본문 끝에 추가
+        if (linksHtml) {
+          const finalReferenceSection = REFERENCE_BOX_TEMPLATE.replace(
+            "{{LINKS}}",
+            linksHtml
+          );
 
-        // 본문 끝에 추가
-        parseResult.content += referenceHtml;
+          // 본문 끝에 확실하게 붙임 (HTML 닫는 태그 앞이 아니라 문자열 끝에)
+          parseResult.content =
+            parseResult.content + "\n\n" + finalReferenceSection;
+
+          logger.info(`✅ 출처 섹션 강제 주입 완료 (${uniqueLinks.size}개)`);
+        } else {
+          logger.warn("⚠️ 이슈는 있으나 유효한 링크(http)를 찾지 못했습니다.");
+          // 디버깅을 위해 데이터 구조 로깅
+          logger.debug(
+            `Issue Data Sample: ${JSON.stringify(selectedIssues[0])}`
+          );
+        }
       }
 
       this.savePromptHistory({
@@ -2158,13 +2275,16 @@ ${prompt}
       systemPrompt = `당신은 전문 블로그 작가입니다.
 주어진 뉴스/이슈를 분석하여 SEO 최적화된 블로그 글을 작성하세요.
 
-[출력 형식 - JSON]
-{
-  "title": "SEO 최적화된 제목",
-  "summary": "핵심 요약 문장",
-  "content": "HTML 형식의 본문 (최소 1500자)",
-  "imageKeyword": "대표 이미지 검색 키워드"
-}
+[중요: 금지사항]
+- JSON 코드나 마크다운 문법을 본문에 절대 포함하지 마세요.
+- HTML 태그만 사용하여 콘텐츠를 작성하세요.
+
+[출력 형식]
+아래 구조를 따라 HTML로만 작성하세요:
+
+<h2>SEO 최적화된 제목</h2>
+<p>핵심 요약 문장</p>
+<p>HTML 형식의 본문 (최소 1500자)</p>
 
 [작성 언어]: ${targetLanguage}
 [추가 지시]: ${instructions}`;
@@ -2179,15 +2299,18 @@ ${prompt}
       systemPrompt = `당신은 전문 블로그 작가입니다.
 다음 템플릿을 참고하여 글을 작성하세요.
 
+[중요: 금지사항]
+- JSON 코드나 마크다운 문법을 본문에 절대 포함하지 마세요.
+- HTML 태그만 사용하여 콘텐츠를 작성하세요.
+
 [템플릿]
 ${selectedTemplate?.content || ""}
 
-[출력 형식 - JSON]
-{
-  "title": "제목",
-  "content": "HTML 본문",
-  "imageKeyword": "이미지 키워드"
-}
+[출력 형식]
+아래 구조를 따라 HTML로만 작성하세요:
+
+<h2>제목</h2>
+<p>HTML 본문</p>
 
 [작성 언어]: ${targetLanguage}
 [추가 지시]: ${instructions}`;
@@ -2602,6 +2725,91 @@ ${targetLanguage}
     } catch (error) {
       aiLogger.error(`카테고리 분류 실패: ${error}`);
       return "기타·잡담";
+    }
+  }
+
+  /**
+   * [NEW] 스마트 SEO 태그 생성기
+   * 본문을 분석하여 검색 유입 가능성이 높은 롱테일 키워드를 생성합니다.
+   */
+  public async generateSEOTags(
+    content: string,
+    targetLanguage: string = "Korean"
+  ): Promise<string[]> {
+    const settings = await secureConfig.getFullSettings();
+    const apiKey = settings.aiApiKey || settings.openrouterApiKey;
+    const modelName = settings.aiModel || "gemini-2.5-flash";
+
+    if (!apiKey) return [];
+
+    // 본문 요약 (토큰 절약)
+    const summaryContent = content.replace(/<[^>]*>/g, " ").substring(0, 1500);
+
+    const prompt = `
+당신은 SEO(검색 엔진 최적화) 전문가입니다.
+아래 블로그 글 본문을 분석하여, 검색 유입이 가장 많이 될법한 **'롱테일 키워드'** 10개를 추출하세요.
+
+[제약 사항]
+1. 단순 명사(예: '주식', '여행', '블로그')는 제외하고, 구체적인 검색 의도가 담긴 구문을 만드세요.
+   - Bad: 주식, 여행, 리뷰, 블로그
+   - Good: 주식 투자 전략 2025, 여름 휴가 여행지 추천, 블로그 시작부터 돈버는 법
+2. 언어: 반드시 **${targetLanguage}**로 작성하세요.
+3. 출력 형식: 오직 콤마(,)로 구분된 텍스트만 출력하세요. (번호 매기기, 해시태그(#) 금지)
+
+[본문 내용]
+${summaryContent}
+    `;
+
+    try {
+      let tagsText = "";
+
+      const provider = settings.aiProvider || "gemini";
+
+      if (provider === "gemini") {
+        const genAI = new GoogleGenerativeAI(settings.aiApiKey);
+        const model = genAI.getGenerativeModel({ model: modelName });
+        const result = await model.generateContent(prompt);
+        tagsText = result.response.text();
+      } else if (provider === "openrouter") {
+        const response = await fetch(
+          "https://openrouter.ai/api/v1/chat/completions",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${settings.openrouterApiKey}`,
+              "Content-Type": "application/json",
+              "HTTP-Referer": "https://autostory-ai-writer.local",
+              "X-Title": "AutoStory AI Writer",
+            },
+            body: JSON.stringify({
+              model: modelName,
+              messages: [{ role: "user", content: prompt }],
+              temperature: 0.3,
+              max_tokens: 100,
+            }),
+          }
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          tagsText = data.choices[0]?.message?.content || "";
+        }
+      } else {
+        throw new Error("지원하지 않는 AI 제공자입니다.");
+      }
+
+      // 결과 정제
+      const tags = tagsText
+        .split(",")
+        .map((tag) => tag.trim().replace(/#/g, "")) // 해시태그 기호 제거
+        .filter((tag) => tag.length > 0)
+        .slice(0, 10); // 최대 10개
+
+      logger.info(`Generated SEO Tags: ${tags.join(", ")}`);
+      return tags;
+    } catch (error) {
+      logger.error(`SEO Tag Generation Failed: ${error}`);
+      return [];
     }
   }
 

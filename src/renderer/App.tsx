@@ -1,15 +1,24 @@
-import React from "react";
+import React, { Suspense } from "react";
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/Layout";
-import Dashboard from "./pages/Dashboard";
-import FeedList from "./pages/FeedList";
-import Settings from "./pages/Settings";
-import WriteConfig from "./pages/WriteConfig";
-import PostList from "./pages/PostList";
-import Templates from "./pages/Templates";
-import { ProtectedRoute } from "./components/AuthGuard";
 import ToastProvider from "./components/Toast";
 import BrowserDownloadModal from "./components/BrowserDownloadModal";
+
+// [OPTIMIZATION] Lazy Loading 적용 - 초기 번들 사이즈 감소
+const Dashboard = React.lazy(() => import("./pages/Dashboard"));
+const FeedList = React.lazy(() => import("./pages/FeedList"));
+const PostList = React.lazy(() => import("./pages/PostList"));
+const Templates = React.lazy(() => import("./pages/Templates"));
+const Settings = React.lazy(() => import("./pages/Settings"));
+const WriteConfig = React.lazy(() => import("./pages/WriteConfig"));
+
+// 로딩 중 표시할 컴포넌트
+const PageLoader = () => (
+  <div className="flex items-center justify-center h-full text-slate-500">
+    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3"></div>
+    Loading...
+  </div>
+);
 
 const App: React.FC = () => {
   return (
@@ -18,16 +27,18 @@ const App: React.FC = () => {
       <BrowserDownloadModal />
       <HashRouter>
         <Layout>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/feeds" element={<FeedList />} />
-            <Route path="/posts" element={<PostList />} />
-            <Route path="/templates" element={<Templates />} />
-            <Route path="/settings" element={<Settings />} />
-            {/* [수정됨] ProtectedRoute 제거: 글 생성 설정은 로그인 없이도 접근 가능해야 함 */}
-            <Route path="/write-config" element={<WriteConfig />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          {/* [OPTIMIZATION] Suspense로 Lazy 컴포넌트 감싸기 */}
+          <Suspense fallback={<PageLoader />}>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/feeds" element={<FeedList />} />
+              <Route path="/posts" element={<PostList />} />
+              <Route path="/templates" element={<Templates />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/write-config" element={<WriteConfig />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
         </Layout>
       </HashRouter>
     </ToastProvider>

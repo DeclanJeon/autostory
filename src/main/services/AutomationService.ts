@@ -8,9 +8,11 @@ import {
   HOME_TOPIC_KEYWORDS,
   CATEGORY_KEYWORDS,
 } from "../config/tistorySelectors";
+import { NAVER_SELECTORS } from "../config/naverSelectors";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import path from "path";
 import fs from "fs-extra";
+import { NaverService } from "./NaverService";
 import { YoutubeTranscript } from "youtube-transcript";
 
 export type LoginState = "logged-in" | "logged-out" | "logging-in" | "unknown";
@@ -38,6 +40,7 @@ export class AutomationService {
   private mainWindow: any; // Electron BrowserWindow 참조
   private aiService: AiService;
   private imageCache: Map<string, string[]> = new Map();
+  private naverService: NaverService;
 
   private loginState: LoginState = "unknown";
   private loginAbortController: AbortController | null = null;
@@ -52,6 +55,7 @@ export class AutomationService {
 
   private constructor() {
     this.aiService = new AiService();
+    this.naverService = new NaverService(null); // Initialize with null first
   }
 
   public static getInstance(): AutomationService {
@@ -63,6 +67,9 @@ export class AutomationService {
 
   public setMainWindow(window: any) {
     this.mainWindow = window;
+    if (this.naverService) {
+      this.naverService.setMainWindow(window);
+    }
   }
 
   public getLoginState(): LoginState {
@@ -798,68 +805,130 @@ export class AutomationService {
     const usedUrls = usedImageUrls || new Set<string>();
 
     for (const match of matches) {
-      const fullTag = match[0];
-      const keyword = match[1].trim();
-      let imageUrl: string | null = null;
+      const fullMatch = match[0];
+      const keyword = match[1];
 
       try {
-        // 1단계: Google 검색 시도
-        imageUrl = await this.fetchImageFromGoogle(keyword, usedUrls);
+        let finalImageUrl: string | null = null;
 
-        if (imageUrl) {
-          sendLogToRenderer(this.mainWindow, `✅ Google: "${keyword}" 성공`);
-        }
-      } catch (e: any) {
-        logger.warn(`Google 이미지 검색 실패 (${keyword}): ${e.message}`);
-      }
-
-      if (!imageUrl) {
-        // 2단계: Pexels 검색 시도 (Google 실패 시)
-        try {
-          imageUrl = await this.fetchRelevantImage(keyword);
-
-          if (imageUrl) {
-            if (usedUrls.has(imageUrl)) {
-              logger.info(`Pexels 중복 이미지, 스킵: ${imageUrl}`);
-              imageUrl = null; // 중복이면 폐기
-            } else {
-              sendLogToRenderer(
-                this.mainWindow,
-                `✅ Pexels: "${keyword}" 성공`
-              );
+        // 1. Google 이미지 검색 시도
+        const googleImages = await this.scrapeGoogleImages(keyword);
+        if (googleImages && googleImages.length > 0) {
+          for (const imgUrl of googleImages) {
+            if (!usedUrls.has(imgUrl) && (await this.verifyImageUrl(imgUrl))) {
+              finalImageUrl = imgUrl;
+              break;
             }
           }
-        } catch (e) {
-          logger.warn(`Pexels 이미지 검색 실패 (${keyword})`);
         }
-      }
 
-      // [핵심 수정] 이미지를 찾았을 때만 HTML 생성
-      if (imageUrl) {
-        usedUrls.add(imageUrl);
+        // 2. Pexels fallback
+        if (!finalImageUrl) {
+          finalImageUrl = await this.fetchRelevantImage(keyword);
+        }
 
-        const htmlImage = `
-<div style="display: flex; justify-content: center; margin: 40px 0;">
-  <div style="max-width: 100%; text-align: center;">
-    <img src="${imageUrl}" alt="${keyword}"
-         style="max-width: 100%; height: auto; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); display: block;"
-         loading="lazy" />
-  </div>
-</div>
-`;
-        // 태그를 이미지 HTML로 교체
-        newContent = newContent.replace(fullTag, htmlImage);
-      } else {
-        // [핵심 수정] 이미지가 없으면 태그를 '빈 문자열'로 교체하여 제거 (텍스트 노출 방지)
-        logger.warn(`❌ 이미지 없음, 태그 삭제: "${keyword}"`);
-        newContent = newContent.replace(fullTag, "");
+        // 3. Placeholder fallback (최종 안전장치)
+        if (!finalImageUrl) {
+          finalImageUrl = `https://placehold.co/800x400/f8f9fa/6c5ce7?font=roboto&text=${encodeURIComponent(
+            keyword
+          )}`;
+        }
 
-        // 만약 태그가 단독으로 있던 문단(<p>[[IMAGE:..]]</p>)이 비게 되면 그것도 정리
-        newContent = newContent.replace(/<p>\s*<\/p>/gi, "");
+        if (finalImageUrl) {
+          usedUrls.add(finalImageUrl);
+          const imageHtml = this.createSectionImageHtml(finalImageUrl, keyword);
+          newContent = newContent.replace(fullMatch, imageHtml);
+        }
+      } catch (e) {
+        logger.error(`이미지 태그 처리 실패 (${keyword}): ${e}`);
+        // 실패 시 태그만 제거
+        newContent = newContent.replace(fullMatch, "");
       }
     }
-
     return newContent;
+  }
+
+  // ==========================================
+  //  NAVER BLOG AUTOMATION
+  // ==========================================
+
+  /**
+   * 네이버 로그인 체크 및 진입 (User Requirement #1)
+   *
+   * 로그인 세션/쿠키가 있고 로그인이 되어있는 상태라면
+   * 글쓰기 페이지로 바로 리다이렉트한다.
+   */
+  // ==========================================
+  // NAVER BLOG AUTOMATION
+  // ==========================================
+
+  /**
+   * 네이버 발행 진입점 (전체 파이프라인 관리)
+   *
+   * 로그인 -> 카테고리 검증(Pre-flight) -> 글쓰기 -> 발행 설정 -> 발행
+   */
+  public async writeToNaver(
+    blogId: string,
+    title: string,
+    contentHtml: string,
+    categoryName?: string
+  ): Promise<void> {
+    this.publishAbortController = new AbortController();
+    const signal = this.publishAbortController.signal;
+
+    try {
+      const page = await this.ensureValidPage();
+
+      if (signal.aborted) {
+        throw new Error("발행이 취소되었습니다.");
+      }
+
+      // 1. 로그인 체크
+      const isLoggedIn = await this.naverService.login(page, blogId);
+      if (!isLoggedIn) {
+        throw new Error("네이버 로그인 실패");
+      }
+
+      if (signal.aborted) {
+        throw new Error("발행이 취소되었습니다.");
+      }
+
+      // 2. 카테고리 검증 및 생성 (Pre-flight Check)
+      if (categoryName && categoryName !== "General") {
+        await this.naverService.ensureCategoryExists(
+          page,
+          blogId,
+          categoryName
+        );
+      }
+
+      if (signal.aborted) {
+        throw new Error("발행이 취소되었습니다.");
+      }
+
+      // 3. 글 작성 및 발행 (Main Flow)
+      await this.naverService.writePost(
+        page,
+        blogId,
+        title,
+        contentHtml,
+        categoryName || ""
+      );
+    } catch (e: any) {
+      if (e.message.includes("취소")) {
+        throw e;
+      }
+
+      logger.error(`네이버 발행 실패: ${e.message}`);
+      sendLogToRenderer(this.mainWindow, `❌ 발행 실패: ${e.message}`);
+
+      if (e.message.includes("closed") || e.message.includes("Target")) {
+        await this.cleanupBrowser();
+      }
+      throw e;
+    } finally {
+      this.publishAbortController = null;
+    }
   }
 
   public async validateAndReplaceImages(htmlContent: string): Promise<string> {
@@ -1305,7 +1374,11 @@ export class AutomationService {
       }
     });
 
-    let processedContent = await this.validateAndReplaceImages(htmlContent);
+    let processedContent = await this.processImageTags(
+      htmlContent,
+      usedImageUrls
+    );
+    processedContent = await this.validateAndReplaceImages(processedContent);
     processedContent = await this.insertSectionImages(
       processedContent,
       usedImageUrls
@@ -1492,7 +1565,9 @@ export class AutomationService {
   public async writePostFromHtmlFile(
     filePath: string,
     title: string,
-    categoryName: string
+    categoryName: string,
+    htmlContent?: string,
+    reservationDate?: Date
   ): Promise<void> {
     this.publishAbortController = new AbortController();
     const signal = this.publishAbortController.signal;
@@ -1507,11 +1582,22 @@ export class AutomationService {
       }
 
       sendLogToRenderer(this.mainWindow, "HTML 파일 읽는 중...");
-      let htmlContent = await fs.readFile(filePath, "utf-8");
 
-      // HTML에서 body 내용만 추출
-      const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-      const bodyContent = bodyMatch ? bodyMatch[1].trim() : htmlContent;
+      // [FIX] 원본 HTML 저장을 위해 변수 분리
+      let originalHtml: string;
+      let bodyContent: string;
+
+      if (htmlContent) {
+        // htmlContent가 전달된 경우
+        originalHtml = htmlContent;
+        const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+        bodyContent = bodyMatch ? bodyMatch[1].trim() : htmlContent;
+      } else {
+        // htmlContent가 없으면 파일에서 읽기
+        originalHtml = await fs.readFile(filePath, "utf-8");
+        const bodyMatch = originalHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+        bodyContent = bodyMatch ? bodyMatch[1].trim() : originalHtml;
+      }
 
       if (signal.aborted) {
         throw new Error("발행이 취소되었습니다.");
@@ -1522,8 +1608,8 @@ export class AutomationService {
         bodyContent
       );
 
-      // 파일 업데이트 (전체 HTML 구조 유지)
-      const updatedHtml = htmlContent.replace(
+      // [FIX] 파일 업데이트 (전체 HTML 구조 유지) - originalHtml 사용
+      const updatedHtml = originalHtml.replace(
         /<body[^>]*>[\s\S]*?<\/body>/i,
         `<body>${processedContent}</body>`
       );
@@ -1651,9 +1737,18 @@ export class AutomationService {
 
       await this.selectHomeTheme(page, cleanTitle, editorTextContent);
 
-      await this.clickPublishButton(page);
+      // 예약 발행인 경우 예약 설정 처리
+      if (reservationDate) {
+        await this.setReservationDate(page, reservationDate);
+        await this.clickReservationPublishButton(page);
+      } else {
+        await this.clickPublishButton(page);
+      }
 
-      sendLogToRenderer(this.mainWindow, "발행 완료!");
+      sendLogToRenderer(
+        this.mainWindow,
+        reservationDate ? "예약 발행 완료!" : "발행 완료!"
+      );
     } catch (e: any) {
       logger.error(`글 발행 실패: ${e.message}`);
       sendLogToRenderer(this.mainWindow, `오류: ${e.message}`);
@@ -2071,11 +2166,32 @@ ${themes.map((theme, index) => `${index + 1}. ${theme}`).join("\n")}
       )}`;
 
       await page.goto(searchUrl, {
-        waitUntil: "networkidle",
+        waitUntil: "domcontentloaded",
         timeout: 20000,
       });
 
-      await page.waitForTimeout(2000);
+      // 쿠키 동의 팝업 처리 (유럽 등 국가에 따라 발생 가능)
+      try {
+        const consentButton = page.locator(
+          "button:has-text('Accept all'), button:has-text('Agree'), button:has-text('동의'), button:has-text('수락')"
+        );
+        if (await consentButton.isVisible({ timeout: 3000 })) {
+          await consentButton.click();
+          logger.info("Google 쿠키 동의 단추 클릭됨");
+          await page.waitForTimeout(1000);
+        }
+      } catch (e) {
+        // 팝업 없음 시 무시
+      }
+
+      // 검색 결과 로딩 대기
+      await page.waitForSelector("img", { timeout: 10000 }).catch(() => {
+        logger.warn("이미지 태그가 로드되지 않았습니다.");
+      });
+
+      // 추가 로딩을 위한 살짝 스크롤
+      await page.evaluate(() => window.scrollBy(0, 500));
+      await page.waitForTimeout(1000);
 
       const results = await page.evaluate(() => {
         const urls: string[] = [];
@@ -3722,6 +3838,124 @@ ${themes.map((theme, index) => `${index + 1}. ${theme}`).join("\n")}
       logger.warn("발행 버튼을 찾을 수 없습니다.");
     } catch (e) {
       logger.warn(`발행 버튼 클릭 실패: ${e}`);
+    }
+  }
+
+  /**
+   * [신규] 예약 날짜 설정
+   * 티스토리 발행 레이어에서 예약 날짜를 설정합니다.
+   */
+  private async setReservationDate(
+    page: Page,
+    reservationDate: Date
+  ): Promise<void> {
+    try {
+      sendLogToRenderer(
+        this.mainWindow,
+        `예약 날짜 설정 중: ${reservationDate.toLocaleString()}`
+      );
+
+      // 티스토리 예약 발행 UI는 보통 라디오 버튼으로 제어됨
+      // "예약 발행" 옵션을 선택해야 함
+      const reservationSelectors = [
+        'input[type="radio"][value="reserve"]',
+        'input[name="publish"][value="reserve"]',
+        'label:has-text("예약")',
+      ];
+
+      let reservationRadio = null;
+      for (const selector of reservationSelectors) {
+        try {
+          reservationRadio = await page.$(selector);
+          if (reservationRadio) {
+            logger.info(`예약 발행 라디오 발견: ${selector}`);
+            break;
+          }
+        } catch {}
+      }
+
+      if (!reservationRadio) {
+        logger.warn("예약 발행 옵션을 찾을 수 없습니다. 예약 날짜 설정 스킵.");
+        return;
+      }
+
+      // 예약 발행 옵션 선택
+      await reservationRadio.click();
+      await page.waitForTimeout(500);
+
+      // 날짜/시간 입력 필드 찾기
+      // 티스토리는 보통 datetime-local 또는 별도의 날짜/시간 필드 사용
+      const dateSelectors = [
+        'input[type="datetime-local"]',
+        'input[name="reservationDate"]',
+        'input[name="reserveDate"]',
+      ];
+
+      let dateInput = null;
+      for (const selector of dateSelectors) {
+        try {
+          dateInput = await page.$(selector);
+          if (dateInput) {
+            logger.info(`날짜 입력 필드 발견: ${selector}`);
+            break;
+          }
+        } catch {}
+      }
+
+      if (dateInput) {
+        // 날짜를 ISO 형식으로 변환 (YYYY-MM-DDTHH:mm)
+        const year = reservationDate.getFullYear();
+        const month = String(reservationDate.getMonth() + 1).padStart(2, "0");
+        const day = String(reservationDate.getDate()).padStart(2, "0");
+        const hours = String(reservationDate.getHours()).padStart(2, "0");
+        const minutes = String(reservationDate.getMinutes()).padStart(2, "0");
+
+        const isoDate = `${year}-${month}-${day}T${hours}:${minutes}`;
+
+        await dateInput.fill(isoDate);
+        await page.waitForTimeout(300);
+
+        logger.info(`예약 날짜 설정 완료: ${isoDate}`);
+      } else {
+        logger.warn("날짜 입력 필드를 찾을 수 없습니다.");
+      }
+    } catch (e: any) {
+      logger.warn(`예약 날짜 설정 중 오류: ${e.message}`);
+      // 오류가 발생해도 계속 진행 (기본 발행으로 대체될 수 있음)
+    }
+  }
+
+  /**
+   * [신규] 예약 발행 버튼 클릭
+   */
+  private async clickReservationPublishButton(page: Page): Promise<void> {
+    try {
+      sendLogToRenderer(this.mainWindow, "예약 발행 버튼 클릭 중...");
+
+      const reservationPublishSelectors = [
+        'button:has-text("예약 발행")',
+        'button:has-text("예약하기")',
+        'button:has-text("예약")',
+        'button[type="button"].reserve',
+        "button.btn_reservation",
+      ];
+
+      for (const selector of reservationPublishSelectors) {
+        try {
+          const btn = await page.waitForSelector(selector, {
+            timeout: 2000,
+          });
+          if (btn) {
+            await btn.click();
+            sendLogToRenderer(this.mainWindow, "예약 발행 버튼 클릭됨!");
+            return;
+          }
+        } catch {}
+      }
+
+      logger.warn("예약 발행 버튼을 찾을 수 없습니다.");
+    } catch (e: any) {
+      logger.warn(`예약 발행 버튼 클릭 실패: ${e.message}`);
     }
   }
 

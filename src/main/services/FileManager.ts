@@ -89,6 +89,11 @@ class NodeCanvasFactory {
   }
 }
 
+// [OPTIMIZATION] 전역 캐시 변수 추가
+let postsCache: any[] | null = null;
+let lastCacheTime = 0;
+const POSTS_CACHE_DURATION = 5000; // 5초 (잦은 갱신 방지)
+
 export class FileManager {
   private baseDir: string;
   private tessDataDir: string;
@@ -98,6 +103,12 @@ export class FileManager {
     this.baseDir = path.join(app.getPath("userData"), "posts");
     // Tesseract 언어 데이터 저장 경로 (캐싱용)
     this.tessDataDir = app.getPath("userData");
+  }
+
+  // [OPTIMIZATION] 캐시 무효화 메소드
+  private invalidateCache() {
+    postsCache = null;
+    lastCacheTime = 0;
   }
 
   public async savePost(
@@ -134,6 +145,9 @@ export class FileManager {
 
       await fs.writeFile(filePath, fileContent, "utf-8");
       logger.info(`파일 저장 완료: ${fileName}`);
+
+      // [OPTIMIZATION] 저장 시 캐시 초기화
+      this.invalidateCache();
 
       return filePath;
     } catch (error) {
@@ -463,40 +477,71 @@ ${content}
 </html>`;
   }
 
+  // [OPTIMIZATION] 캐싱 및 병렬 처리 적용
   public async listPosts(): Promise<any[]> {
+    const now = Date.now();
+
+    // 캐시가 유효하면 즉시 반환
+    if (postsCache && now - lastCacheTime < POSTS_CACHE_DURATION) {
+      return postsCache;
+    }
+
     try {
       await fs.ensureDir(this.baseDir);
       const categories = await fs.readdir(this.baseDir);
       let results: any[] = [];
       const publishedPosts = store.get("publishedPosts") || [];
 
-      for (const category of categories) {
+      // 병렬 처리: 모든 카테고리를 동시에 스캔
+      const categoryPromises = categories.map(async (category) => {
         const categoryPath = path.join(this.baseDir, category);
-        const stat = await fs.stat(categoryPath);
+        try {
+          const stat = await fs.stat(categoryPath);
+          if (stat.isDirectory()) {
+            const files = await fs.readdir(categoryPath);
+            // 병렬 처리: 폴더 내 파일들도 동시에 스캔
+            const filePromises = files.map(async (file) => {
+              if (file.endsWith(".md") || file.endsWith(".html")) {
+                const filePath = path.join(categoryPath, file);
+                try {
+                  const fileStat = await fs.stat(filePath);
+                  return {
+                    name: file,
+                    path: filePath,
+                    category: category,
+                    createdAt: fileStat.birthtime.toISOString(),
+                    isPublished: publishedPosts.includes(filePath),
+                    format: file.endsWith(".html") ? "html" : "md",
+                  };
+                } catch {
+                  return null;
+                }
+              }
+              return null;
+            });
 
-        if (stat.isDirectory()) {
-          const files = await fs.readdir(categoryPath);
-          for (const file of files) {
-            if (file.endsWith(".md") || file.endsWith(".html")) {
-              const filePath = path.join(categoryPath, file);
-              const fileStat = await fs.stat(filePath);
-              results.push({
-                name: file,
-                path: filePath,
-                category: category,
-                createdAt: fileStat.birthtime.toISOString(),
-                isPublished: publishedPosts.includes(filePath),
-                format: file.endsWith(".html") ? "html" : "md",
-              });
-            }
+            const categoryFiles = await Promise.all(filePromises);
+            return categoryFiles.filter((f) => f !== null);
           }
+        } catch {
+          return [];
         }
-      }
+        return [];
+      });
 
-      return results.sort(
+      const allFiles = await Promise.all(categoryPromises);
+      results = allFiles.flat();
+
+      const sortedResults = results.sort(
         (a, b) =>
           new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
+
+      // 캐시 업데이트
+      postsCache = sortedResults;
+      lastCacheTime = now;
+
+      return sortedResults;
     } catch (error) {
       logger.error(`파일 목록 조회 실패: ${error}`);
       return [];
@@ -523,6 +568,9 @@ ${content}
         store.set("publishedPosts", newPublished);
 
         logger.info(`파일 삭제 완료: ${filePath}`);
+
+        // [OPTIMIZATION] 삭제 시 캐시 초기화
+        this.invalidateCache();
       }
     } catch (error) {
       logger.error(`파일 삭제 실패: ${error}`);

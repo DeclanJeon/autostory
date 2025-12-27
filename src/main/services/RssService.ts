@@ -1,5 +1,5 @@
 import Parser from "rss-parser";
-import store from "../config/store";
+import store, { isLinkPublished } from "../config/store";
 import { logger } from "../utils/logger";
 
 export interface FeedItem {
@@ -9,6 +9,7 @@ export interface FeedItem {
   contentSnippet?: string;
   source: string;
   isoDate: string;
+  isPublished: boolean; // [NEW] 발행 여부 플래그 추가
 }
 
 export class RssService {
@@ -42,7 +43,11 @@ export class RssService {
         cacheAge < ONE_HOUR
       ) {
         logger.info(`RSS 캐시 사용: ${cache.items.length}개 항목`);
-        return cache.items;
+        // [FIX] 캐시된 아이템이라도 발행 여부는 최신 상태로 업데이트해서 반환
+        return cache.items.map((item) => ({
+          ...item,
+          isPublished: isLinkPublished(item.link),
+        }));
       }
     }
 
@@ -61,6 +66,8 @@ export class RssService {
           contentSnippet: item.contentSnippet?.slice(0, 150) + "..." || "",
           source: feed.title || "Unknown Source",
           isoDate: item.isoDate || new Date().toISOString(),
+          // [NEW] 스토어에서 발행 여부 확인
+          isPublished: isLinkPublished(item.link || ""),
         }));
         return items;
       } catch (error) {

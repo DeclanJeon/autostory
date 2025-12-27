@@ -74,6 +74,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   publishLatestPost: () => ipcRenderer.invoke("publish-latest-post"),
   publishPost: (filePath: string, category: string) =>
     ipcRenderer.invoke("publish-post", { filePath, category }),
+  // [신규] 다중 플랫폼 발행
+  publishPostMulti: (data: {
+    filePath: string;
+    platforms: string[];
+    category: string;
+  }) => ipcRenderer.invoke("publish-post-multi", data),
   generateContent: (data: any) => ipcRenderer.invoke("generate-content", data),
 
   testImageSearch: (params: { text: string }) =>
@@ -235,4 +241,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("browser-download-error", subscription);
     return () => ipcRenderer.removeAllListeners("browser-download-error");
   },
+
+  // [신규] RSS 내보내기/불러오기
+  exportRssFeeds: (content: string) =>
+    ipcRenderer.invoke("export-rss-feeds", content),
+  importRssFeeds: () => ipcRenderer.invoke("import-rss-feeds"),
+
+  // ============================================================
+  // [NEW] 일일 통계 조회 API
+  // ============================================================
+
+  /**
+   * 일일 발행량 통계 조회
+   */
+  getDailyStats: () => ipcRenderer.invoke("get-daily-stats"),
 });

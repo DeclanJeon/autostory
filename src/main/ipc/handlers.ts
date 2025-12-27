@@ -1,5 +1,6 @@
-import { ipcMain } from "electron";
+import { ipcMain, dialog } from "electron";
 import { v4 as uuidv4 } from "uuid";
+import fs from "fs-extra";
 import { AutomationService } from "../services/AutomationService";
 import { RssService } from "../services/RssService";
 import { AiService } from "../services/AiService";
@@ -12,7 +13,7 @@ import {
 import { secureConfig } from "../services/SecureConfigService";
 import { jobQueue } from "../services/JobQueueService";
 import { logger } from "../utils/logger";
-import store from "../config/store";
+import store, { UsageManager } from "../config/store";
 import { ollamaInstaller, InstallProgress } from "../utils/ollamaInstaller";
 import { localAiService } from "../services/LocalAiService";
 import { ollamaConfig } from "../config/ollamaConfig";
@@ -89,7 +90,7 @@ export const registerHandlers = (mainWindow: any) => {
 
   ipcMain.handle(
     "start-write",
-    async (_event, { title, content, category }) => {
+    async (_event, { title, content, category, tags }) => {
       try {
         const filePath = await fileManager.savePost(
           category,
@@ -197,6 +198,21 @@ export const registerHandlers = (mainWindow: any) => {
         // 3. 자동 발행 (옵션)
         if (autoPublish && generatedFiles.length > 0) {
           progressCallback("🚀 자동 발행을 시작합니다...");
+
+          // [CHECK] 티스토리 발행 가능 여부 확인
+          const settings = store.get("settings");
+          const tistoryId = settings.blogName;
+
+          if (!tistoryId) {
+            throw new Error("설정에 티스토리 블로그 주소가 없습니다.");
+          }
+
+          if (!UsageManager.checkLimit("tistory", tistoryId)) {
+            throw new Error(
+              `티스토리 일일 발행 한도(15회)를 초과했습니다. (${tistoryId})`
+            );
+          }
+
           const loginResult = await automation.login();
 
           if (!loginResult) {
@@ -207,6 +223,12 @@ export const registerHandlers = (mainWindow: any) => {
             const path = generatedFiles[i];
             const partNum = i + 1;
             const total = generatedFiles.length;
+
+            // 발행 직전 다시 한번 체크 (루프 도중 한도 초과 가능성)
+            if (!UsageManager.checkLimit("tistory", tistoryId)) {
+              progressCallback(`[${partNum}] 중단: 일일 한도 초과`);
+              break;
+            }
 
             progressCallback(
               `[${partNum}/${total}] 발행 중... (브라우저 제어)`
@@ -221,6 +243,9 @@ export const registerHandlers = (mainWindow: any) => {
 
               await automation.writePostFromHtmlFile(path, postTitle, category);
               fileManager.markPostAsPublished(path);
+
+              // [INCREMENT] 카운트 증가
+              UsageManager.incrementUsage("tistory", tistoryId);
 
               logger.info(`✅ 발행 완료: ${postTitle}`);
 
@@ -399,7 +424,7 @@ export const registerHandlers = (mainWindow: any) => {
     "generate-content",
     async (
       _event,
-      { issues, instructions, templateId, category, autoPublish = true }
+      { issues, instructions, templateId, category, tags, autoPublish = true }
     ) => {
       try {
         logger.info("AI 콘텐츠 생성 시작...");
@@ -592,23 +617,26 @@ export const registerHandlers = (mainWindow: any) => {
     }
   });
 
-  ipcMain.handle("publish-post", async (_event, { filePath, category }) => {
-    try {
-      const content = await fileManager.readPost(filePath);
-      const { title } = fileManager.extractTitleAndBody(filePath, content);
+  ipcMain.handle(
+    "publish-post",
+    async (_event, { filePath, category, tags }) => {
+      try {
+        const content = await fileManager.readPost(filePath);
+        const { title } = fileManager.extractTitleAndBody(filePath, content);
 
-      const loginResult = await automation.login();
-      if (!loginResult) {
-        return { success: false, error: "로그인 실패" };
+        const loginResult = await automation.login();
+        if (!loginResult) {
+          return { success: false, error: "로그인 실패" };
+        }
+
+        await automation.writePostFromHtmlFile(filePath, title, category);
+        fileManager.markPostAsPublished(filePath);
+        return { success: true };
+      } catch (error: any) {
+        return { success: false, error: error.message };
       }
-
-      await automation.writePostFromHtmlFile(filePath, title, category);
-      fileManager.markPostAsPublished(filePath);
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, error: error.message };
     }
-  });
+  );
 
   ipcMain.handle("test-image-search", async (_event, { text }) => {
     try {
@@ -1008,6 +1036,221 @@ export const registerHandlers = (mainWindow: any) => {
       logger.error(`작업 정리 실패: ${e.message}`);
       return { success: false, error: e.message };
     }
+  });
+
+  // ============================================================
+  // [NEW] 네이버 관련 핸들러
+  // ============================================================
+
+  /**
+   * 네이버 로그인 핸들러
+   */
+  // TODO: loginNaver 메서드가 AutomationService에 없음 - 구현 필요
+  // ipcMain.handle("start-naver-login", async () => {
+  //   return await automation.loginNaver();
+  // });
+
+  // ============================================================
+  // [NEW] RSS 내보내기/불러오기 핸들러
+  // ============================================================
+
+  /**
+   * RSS 피드 내보내기 (.md 파일 저장)
+   */
+  ipcMain.handle("export-rss-feeds", async (_event, content: string) => {
+    try {
+      const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: "RSS 피드 내보내기",
+        defaultPath: "rss_feeds.md",
+        filters: [{ name: "Markdown Files", extensions: ["md", "txt"] }],
+      });
+
+      if (canceled || !filePath) {
+        return { success: false, error: "취소됨" };
+      }
+
+      await fs.writeFile(filePath, content, "utf-8");
+      return { success: true, filePath };
+    } catch (error: any) {
+      logger.error(`RSS Export failed: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  });
+
+  /**
+   * RSS 피드 가져오기 (.md 파일 읽기)
+   */
+  ipcMain.handle("import-rss-feeds", async () => {
+    try {
+      const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+        title: "RSS 피드 불러오기",
+        properties: ["openFile"],
+        filters: [{ name: "Markdown/Text Files", extensions: ["md", "txt"] }],
+      });
+
+      if (canceled || filePaths.length === 0) {
+        return { success: false, error: "취소됨" };
+      }
+
+      const content = await fs.readFile(filePaths[0], "utf-8");
+      return { success: true, content };
+    } catch (error: any) {
+      logger.error(`RSS Import failed: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  });
+
+  /**
+   * 다중 플랫폼 발행 핸들러 (UsageManager 적용)
+   */
+  ipcMain.handle(
+    "publish-post-multi",
+    async (_event, { filePath, platforms, category, tags }) => {
+      const fileManager = new FileManager();
+      const settings = store.get("settings");
+      const results = {
+        tistory: false,
+        naver: false,
+        reservation: false,
+        reservationDate: null as string | null,
+        errors: [] as string[],
+      };
+
+      // [CHECK] 날짜 변경 체크 (데이터 정합성 보장)
+      UsageManager.ensureStructureAndDate();
+
+      try {
+        const content = await fileManager.readPost(filePath);
+        const { title, body } = fileManager.extractTitleAndBody(
+          filePath,
+          content
+        );
+
+        // 1. 티스토리 발행
+        if (platforms.includes("tistory")) {
+          const tistoryId = settings.blogName;
+
+          if (!tistoryId) {
+            results.errors.push("티스토리 설정(블로그 이름)이 없습니다.");
+          } else {
+            try {
+              await automation.login(); // 선 로그인 시도
+
+              // [CHECK] 한도 체크
+              const canPublishNow = UsageManager.checkLimit(
+                "tistory",
+                tistoryId
+              );
+              let reservationDate: Date | undefined = undefined;
+
+              if (!canPublishNow) {
+                logger.info(
+                  `티스토리 한도 초과 (${tistoryId}). 예약 발행으로 전환합니다.`
+                );
+
+                // 내일 오전 7~10시 사이 랜덤 예약
+                const tomorrow = new Date();
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                tomorrow.setHours(
+                  7 + Math.floor(Math.random() * 3),
+                  Math.floor(Math.random() * 60),
+                  0,
+                  0
+                );
+
+                reservationDate = tomorrow;
+                results.reservation = true;
+                results.reservationDate = tomorrow.toLocaleString();
+              }
+
+              // 발행 실행 (즉시 또는 예약)
+              await automation.writePostFromHtmlFile(
+                filePath,
+                title,
+                category,
+                undefined,
+                reservationDate
+              );
+
+              results.tistory = true;
+
+              // [INCREMENT] 즉시 발행인 경우에만 카운트 증가
+              if (!reservationDate) {
+                UsageManager.incrementUsage("tistory", tistoryId);
+              }
+            } catch (e: any) {
+              logger.error(`Tistory Publish Error: ${e.message}`);
+              results.errors.push(`티스토리: ${e.message}`);
+            }
+          }
+        }
+
+        // 2. 네이버 발행
+        if (platforms.includes("naver")) {
+          try {
+            if (!settings.naverEnabled) {
+              throw new Error("네이버 발행이 비활성화되어 있습니다.");
+            }
+
+            const blogId = settings.naverBlogId;
+            if (!blogId) {
+              throw new Error("네이버 블로그 ID가 설정되지 않았습니다.");
+            }
+
+            // [CHECK] 한도 체크
+            if (!UsageManager.checkLimit("naver", blogId)) {
+              throw new Error(
+                `네이버 일일 발행 한도(100개)를 초과했습니다. (${blogId})`
+              );
+            }
+
+            logger.info(`네이버 발행 시작: ${blogId} / ${title}`);
+
+            const targetCategory = category || "IT";
+
+            await automation.writeToNaver(blogId, title, body, targetCategory);
+
+            // [INCREMENT] 카운트 증가
+            UsageManager.incrementUsage("naver", blogId);
+
+            results.naver = true;
+            logger.info("네이버 발행 성공!");
+          } catch (e: any) {
+            logger.error(`Naver Publish Error: ${e.message}`);
+            results.errors.push(`네이버: ${e.message}`);
+          }
+        }
+
+        // 성공 여부 마킹
+        if (results.tistory || results.naver) {
+          fileManager.markPostAsPublished(filePath);
+        }
+
+        return { success: true, results };
+      } catch (error: any) {
+        return { success: false, error: error.message };
+      }
+    }
+  );
+
+  /**
+   * 대시보드 통계 API 수정 (UsageManager 적용)
+   * 현재 설정된 계정의 카운트만 필터링하여 반환
+   */
+  ipcMain.handle("get-daily-stats", () => {
+    const settings = store.get("settings");
+    const tistoryId = settings.blogName || "";
+    const naverId = settings.naverBlogId || "";
+
+    // UsageManager가 데이터 정합성(날짜 등)을 먼저 체크함
+    const stats = UsageManager.getAllStats();
+
+    return {
+      // 현재 활성화된 블로그의 카운트만 보냄 (UI 단순화)
+      tistoryCount: tistoryId ? stats.tistory[tistoryId] || 0 : 0,
+      naverCount: naverId ? stats.naver[naverId] || 0 : 0,
+      lastResetDate: stats.lastResetDate,
+    };
   });
 };
 

@@ -16,13 +16,19 @@ const WriteConfig: React.FC = () => {
 
   // 상태 관리
   const [isGenerating, setIsGenerating] = useState(false);
-  const [autoPublish, setAutoPublish] = useState(true); // 자동 발행 모드
+  const [autoPublish, setAutoPublish] = useState(true);
   const [generatedResult, setGeneratedResult] = useState<{
     filePath: string;
     title: string;
-  } | null>(null); // 생성 결과 저장
+  } | null>(null);
   const [log, setLog] = useState("");
   const [writeMode, setWriteMode] = useState<"auto" | "custom">("auto");
+
+  // [NEW] 플랫폼 선택 상태 (초기값은 설정에서 로드 후 갱신)
+  const [targetPlatforms, setTargetPlatforms] = useState({
+    tistory: true,
+    naver: false,
+  });
 
   // [신규] 이미지 테스트 상태
   const [isTestingImage, setIsTestingImage] = useState(false);
@@ -40,10 +46,30 @@ const WriteConfig: React.FC = () => {
       });
     }
 
+    // [디버그] 데이터 확인
+    if (selectedIssues.length > 0) {
+      console.log("Loaded Issues:", selectedIssues);
+      const missingLinks = selectedIssues.filter((i: any) => !i.link && !i.url);
+      if (missingLinks.length > 0) {
+        console.warn(
+          "⚠️ 경고: 일부 이슈에 링크 정보가 없습니다!",
+          missingLinks
+        );
+      }
+    }
+
     // [추가] 진입 시 데이터가 없으면 목록으로 리다이렉트 안내
     if (selectedIssues.length === 0) {
       // 상황에 따라 리다이렉트하거나 안내 메시지 표시
     }
+
+    // [NEW] 사용자 설정 불러와서 플랫폼 기본값 적용
+    window.electronAPI.getSettings().then((settings) => {
+      setTargetPlatforms({
+        tistory: settings.tistoryEnabled,
+        naver: settings.naverEnabled && !!settings.naverBlogId,
+      });
+    });
   }, [selectedIssues.length]); // 의존성 추가
 
   const { showSuccess, showError, showInfo } = useToastHelpers();
@@ -60,26 +86,65 @@ const WriteConfig: React.FC = () => {
     }
 
     try {
+      // 1. 콘텐츠 생성 (autoPublish는 false로 설정하여 직접 제어)
       const result = await window.electronAPI.generateContent({
         issues: selectedIssues,
         instructions,
         templateId:
           writeMode === "auto" ? "auto-analysis-mode" : selectedTemplateId,
         category: targetCategory,
-        autoPublish: autoPublish,
+        autoPublish: false, // 일단 생성만 먼저 함
       });
 
-      if (result.success) {
-        if (result.published) {
-          setLog(`🎉 발행 완료! 제목: ${result.title}`);
-          showSuccess(
-            "발행 성공!",
-            "글이 티스토리에 성공적으로 발행되었습니다."
-          );
-          setTimeout(() => navigate("/posts"), 2000);
+      if (result.success && result.filePath) {
+        setLog("✅ 콘텐츠 생성 완료. 자동 발행 시작...");
+
+        if (autoPublish) {
+          const platforms = [];
+          if (targetPlatforms.tistory) platforms.push("tistory");
+          if (targetPlatforms.naver) platforms.push("naver");
+
+          if (platforms.length === 0) {
+            showInfo("알림", "발행할 플랫폼이 선택되지 않았습니다.");
+            setIsGenerating(false);
+            return;
+          }
+
+          // 2. 다중 발행 호출
+          const pubResult = await window.electronAPI.publishPostMulti({
+            filePath: result.filePath,
+            category: targetCategory,
+            platforms,
+          });
+
+          if (pubResult.success) {
+            const results = pubResult.results;
+            let msg = "";
+
+            // 결과 메시지 구성
+            if (results?.tistory) {
+              if (results.reservation) {
+                msg += `✅ 티스토리 (예약: ${results.reservationDate})\n`;
+              } else {
+                msg += "✅ 티스토리 발행 성공\n";
+              }
+            }
+            if (results?.naver) msg += "✅ 네이버 발행 성공\n";
+
+            if (results?.errors && results.errors.length > 0) {
+              msg += "\n❌ 오류:\n" + results.errors.join("\n");
+              showInfo("일부 발행 실패", msg);
+            } else {
+              showSuccess("발행 완료!", msg);
+            }
+            setTimeout(() => navigate("/posts"), 1500);
+          } else {
+            showError("발행 중 오류", pubResult.error || "알 수 없는 오류");
+          }
         } else {
           setLog(`생성 완료! 파일 저장됨.`);
           showInfo("생성 완료", "글이 생성되었습니다. 수동 발행이 필요합니다.");
+          setTimeout(() => navigate("/posts"), 1000);
         }
       } else {
         setLog(`실패: ${result.error}`);
@@ -263,6 +328,76 @@ const WriteConfig: React.FC = () => {
           </div>
 
           <div className="mt-auto border-t pt-4">
+            {/* [UPDATED] 자동 발행 옵션 UI */}
+            <div className="flex flex-col gap-3 mb-4 bg-gray-50 p-4 rounded border border-gray-200">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                  🚀 자동 발행 대상
+                </span>
+                <label className="flex items-center gap-2 text-xs text-gray-500 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoPublish}
+                    onChange={(e) => setAutoPublish(e.target.checked)}
+                    className="rounded text-blue-600"
+                  />
+                  생성 후 즉시 발행
+                </label>
+              </div>
+
+              <div className="flex gap-4 mt-1">
+                {/* 티스토리 체크박스 */}
+                <label
+                  className={`flex items-center gap-2 text-sm cursor-pointer p-2 rounded transition border ${
+                    targetPlatforms.tistory
+                      ? "bg-white border-orange-200 text-orange-700"
+                      : "bg-gray-100 border-transparent text-gray-400"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={targetPlatforms.tistory}
+                    onChange={(e) =>
+                      setTargetPlatforms((prev) => ({
+                        ...prev,
+                        tistory: e.target.checked,
+                      }))
+                    }
+                    disabled={!autoPublish}
+                    className="text-orange-500 focus:ring-orange-500 rounded"
+                  />
+                  <span className="font-bold">Tistory</span>
+                </label>
+
+                {/* 네이버 체크박스 */}
+                <label
+                  className={`flex items-center gap-2 text-sm cursor-pointer p-2 rounded transition border ${
+                    targetPlatforms.naver
+                      ? "bg-white border-green-200 text-green-700"
+                      : "bg-gray-100 border-transparent text-gray-400"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={targetPlatforms.naver}
+                    onChange={(e) =>
+                      setTargetPlatforms((prev) => ({
+                        ...prev,
+                        naver: e.target.checked,
+                      }))
+                    }
+                    disabled={!autoPublish}
+                    className="text-green-600 focus:ring-green-500 rounded"
+                  />
+                  <span className="font-bold">Naver</span>
+                </label>
+              </div>
+
+              <p className="text-xs text-gray-400 mt-1">
+                ※ 티스토리는 일일 15회 초과 시 자동으로 예약 발행됩니다.
+              </p>
+            </div>
+
             {log && (
               <div
                 className={`text-sm mb-3 font-mono p-3 rounded ${

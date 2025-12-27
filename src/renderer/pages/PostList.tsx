@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from "react";
-import { useToastHelpers } from "../components/Toast"; // Toast 알림 추가
+import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { useToastHelpers } from "../components/Toast";
 import FileUploadModal from "../components/FileUploadModal";
 import LinkInputModal from "../components/LinkInputModal";
 
@@ -13,7 +13,6 @@ interface PostFile {
 
 const PostList: React.FC = () => {
   const [posts, setPosts] = useState<PostFile[]>([]);
-  // [신규] 탭 상태
   const [activeTab, setActiveTab] = useState<"draft" | "published">("draft");
   const [selectedPost, setSelectedPost] = useState<{
     name: string;
@@ -22,13 +21,29 @@ const PostList: React.FC = () => {
     category: string;
   } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [isPublishing, setIsPublishing] = useState(false); // 발행 중 상태
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false); // 업로드 모달 상태
-  const [isLinkModalOpen, setIsLinkModalOpen] = useState(false); // 링크 모달 상태
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState(""); // [OPTIMIZATION] 검색 필터 추가
   const { showSuccess, showError, showInfo } = useToastHelpers();
+
+  // [NEW] 발행 플랫폼 선택 상태
+  const [targetPlatforms, setTargetPlatforms] = useState({
+    tistory: true,
+    naver: false,
+  });
 
   useEffect(() => {
     loadPosts();
+    // 설정값 불러와서 초기 상태 설정
+    if (window.electronAPI) {
+      window.electronAPI.getSettings().then((settings) => {
+        setTargetPlatforms({
+          tistory: true, // 티스토리는 항상 기본값
+          naver: settings.naverEnabled && !!settings.naverBlogId,
+        });
+      });
+    }
   }, []);
 
   const loadPosts = async () => {
@@ -61,42 +76,49 @@ const PostList: React.FC = () => {
     }
   };
 
-  // [기능 추가] 포스트 삭제
-  const handleDelete = async (filePath: string, e: React.MouseEvent) => {
-    e.stopPropagation(); // 부모 클릭 이벤트 방지
-
+  // [수정] 다중 발행 핸들러
+  const handleMultiPublish = async (filePath: string, category: string) => {
     if (!window.electronAPI) return;
-    if (!confirm("정말 이 글을 삭제하시겠습니까? 복구할 수 없습니다.")) return;
 
-    try {
-      await window.electronAPI.deletePost(filePath);
-      showSuccess("파일이 삭제되었습니다.");
-      loadPosts(); // 목록 갱신
-      if (selectedPost?.path === filePath) {
-        setSelectedPost(null); // 선택된 글이었다면 상세 뷰 닫기
-      }
-    } catch (e: any) {
-      showError(e.message);
+    const platforms = [];
+    if (targetPlatforms.tistory) platforms.push("tistory");
+    if (targetPlatforms.naver) platforms.push("naver");
+
+    if (platforms.length === 0) {
+      showError("발행할 플랫폼을 하나 이상 선택해주세요.");
+      return;
     }
-  };
 
-  // [기능 추가] 재발행 핸들러
-  const handleRepublish = async (filePath: string, category: string) => {
-    if (!window.electronAPI) return;
-
-    if (!confirm("이 글을 티스토리에 발행하시겠습니까?")) return;
+    if (
+      !confirm(`선택한 플랫폼([${platforms.join(", ")}])에 발행하시겠습니까?`)
+    )
+      return;
 
     setIsPublishing(true);
-    showInfo("발행 시작", "브라우저를 열어 글을 발행합니다...");
+    showInfo("발행 시작", "브라우저를 제어하여 글을 발행합니다...");
 
     try {
-      const result = await window.electronAPI.publishPost(filePath, category);
+      const result = await window.electronAPI.publishPostMulti({
+        filePath,
+        platforms,
+        category,
+      });
 
       if (result.success) {
-        showSuccess("글이 성공적으로 발행되었습니다!");
-        loadPosts(); // 목록 갱신 (발행됨 태그 업데이트)
+        const results = result.results;
+        let msg = "결과:\n";
+        if (results?.tistory) msg += "✅ 티스토리 성공\n";
+        if (results?.naver) msg += "✅ 네이버 성공\n";
+
+        if (results?.errors && results.errors.length > 0) {
+          msg += "\n⚠️ 일부 오류:\n" + results.errors.join("\n");
+          showError("부분 완료", msg);
+        } else {
+          showSuccess("발행 완료!", msg);
+        }
+        loadPosts();
       } else {
-        showError(result.error || "알 수 없는 오류가 발생했습니다.");
+        showError("발행 실패", result.error || "알 수 없는 오류");
       }
     } catch (error: any) {
       showError("오류", error.message);
@@ -109,12 +131,43 @@ const PostList: React.FC = () => {
     setSelectedPost(null);
   };
 
-  // [신규] 탭 필터링 로직
+  // [OPTIMIZATION] 필터링 로직 최적화 (검색어 포함)
   const filteredPosts = useMemo(() => {
-    return posts.filter((post) =>
-      activeTab === "published" ? post.isPublished : !post.isPublished
-    );
-  }, [posts, activeTab]);
+    return posts.filter((post) => {
+      // 1. 탭 필터
+      const tabMatch =
+        activeTab === "published" ? post.isPublished : !post.isPublished;
+      if (!tabMatch) return false;
+
+      // 2. 검색어 필터
+      if (searchTerm) {
+        const term = searchTerm.toLowerCase();
+        return (
+          post.name.toLowerCase().includes(term) ||
+          post.category.toLowerCase().includes(term)
+        );
+      }
+      return true;
+    });
+  }, [posts, activeTab, searchTerm]);
+
+  const handleDelete = useCallback(
+    async (filePath: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!window.electronAPI) return;
+      if (!confirm("정말 삭제하시겠습니까? 복구할 수 없습니다.")) return;
+
+      try {
+        await window.electronAPI.deletePost(filePath);
+        showSuccess("삭제되었습니다.");
+        loadPosts();
+        setSelectedPost((prev) => (prev?.path === filePath ? null : prev));
+      } catch (e: any) {
+        showError(e.message);
+      }
+    },
+    []
+  );
 
   return (
     <div className="p-6 bg-gray-50 h-full flex flex-col text-slate-800">
@@ -125,55 +178,96 @@ const PostList: React.FC = () => {
               onClick={handleBack}
               className="text-gray-500 hover:text-gray-700 text-sm"
             >
-              ← 목록으로
+              ← 뒤로가기
             </button>
             <span className="truncate flex-1">{selectedPost.name}</span>
-            {/* [UI 추가] 상세 화면에서의 발행 버튼 */}
-            <button
-              onClick={() =>
-                handleRepublish(selectedPost.path, selectedPost.category)
-              }
-              disabled={isPublishing}
-              className={`text-sm px-4 py-2 rounded text-white font-bold transition ${
-                isPublishing
-                  ? "bg-gray-400 cursor-not-allowed"
-                  : "bg-orange-500 hover:bg-orange-600"
-              }`}
-            >
-              {isPublishing ? "발행 중..." : "🚀 티스토리 발행"}
-            </button>
+
+            <div className="flex items-center gap-3 bg-white px-3 py-1.5 rounded-lg border shadow-sm">
+              <label className="flex items-center gap-1 text-sm font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={targetPlatforms.tistory}
+                  onChange={(e) =>
+                    setTargetPlatforms((prev) => ({
+                      ...prev,
+                      tistory: e.target.checked,
+                    }))
+                  }
+                  className="rounded text-orange-500 focus:ring-orange-500"
+                />
+                티스토리
+              </label>
+              <div className="w-px h-4 bg-gray-300"></div>
+              <label className="flex items-center gap-1 text-sm font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={targetPlatforms.naver}
+                  onChange={(e) =>
+                    setTargetPlatforms((prev) => ({
+                      ...prev,
+                      naver: e.target.checked,
+                    }))
+                  }
+                  className="rounded text-green-500 focus:ring-green-500"
+                />
+                네이버
+              </label>
+              <button
+                onClick={() =>
+                  handleMultiPublish(selectedPost.path, selectedPost.category)
+                }
+                disabled={isPublishing}
+                className={`ml-2 text-sm px-4 py-1.5 rounded text-white font-bold transition flex items-center gap-2 ${
+                  isPublishing
+                    ? "bg-gray-400 cursor-not-allowed"
+                    : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow"
+                }`}
+              >
+                {isPublishing ? (
+                  <>
+                    <span className="animate-spin text-xs">⏳</span> 발행 중...
+                  </>
+                ) : (
+                  "발행하기"
+                )}
+              </button>
+            </div>
           </>
         ) : (
           <>
-            📂 생성된 글 목록
-            <div className="ml-auto flex gap-2">
+            포스트 목록
+            <div className="ml-auto flex gap-2 items-center">
+              <input
+                type="text"
+                placeholder="제목 검색..."
+                className="text-sm border rounded px-3 py-1.5 w-48 focus:outline-blue-500"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
               <button
                 onClick={() => setIsLinkModalOpen(true)}
-                className="text-sm bg-purple-500 hover:bg-purple-600 text-white px-3 py-1 rounded transition flex items-center gap-1 shadow"
-                title="링크 내용을 분석하여 글 생성"
+                className="text-sm bg-purple-500 hover:bg-purple-600 text-white px-3 py-1.5 rounded shadow"
               >
-                🔗 링크 등록
+                🔗 링크 변환
               </button>
               <button
                 onClick={() => setIsUploadModalOpen(true)}
-                className="text-sm bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded transition flex items-center gap-1 shadow"
-                title="파일 업로드 및 시리즈 생성"
+                className="text-sm bg-blue-500 hover:bg-blue-600 text-white px-3 py-1.5 rounded shadow"
               >
-                📄 파일 업로드
+                📂 파일 변환
               </button>
               <button
                 onClick={loadPosts}
-                className="text-sm bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 rounded transition flex items-center gap-1"
+                className="text-sm bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded"
                 title="새로고침"
               >
-                🔄 갱신
+                🔄
               </button>
             </div>
           </>
         )}
       </h2>
 
-      {/* [신규] 탭 네비게이션 */}
       {!selectedPost && (
         <div className="flex gap-1 mb-3 border-b border-gray-300">
           <button
@@ -184,7 +278,7 @@ const PostList: React.FC = () => {
                 : "bg-gray-100 text-gray-500 hover:bg-gray-200"
             }`}
           >
-            📝 미발행 드래프트{" "}
+            작성 중{" "}
             <span className="ml-1 px-1.5 py-0.5 bg-gray-200 rounded-full text-xs">
               {posts.filter((p) => !p.isPublished).length}
             </span>
@@ -197,7 +291,7 @@ const PostList: React.FC = () => {
                 : "bg-gray-100 text-gray-500 hover:bg-gray-200"
             }`}
           >
-            ✅ 발행 완료{" "}
+            발행됨{" "}
             <span className="ml-1 px-1.5 py-0.5 bg-gray-200 rounded-full text-xs">
               {posts.filter((p) => p.isPublished).length}
             </span>
@@ -216,9 +310,11 @@ const PostList: React.FC = () => {
               <div className="text-center py-20 text-gray-400">로딩 중...</div>
             ) : filteredPosts.length === 0 ? (
               <div className="text-center py-20 text-gray-400">
-                {activeTab === "draft"
-                  ? "발행 대기 중인 글이 없습니다."
-                  : "발행된 글 내역이 없습니다."}
+                {searchTerm
+                  ? "검색 결과가 없습니다."
+                  : activeTab === "draft"
+                  ? "작성 중인 글이 없습니다."
+                  : "발행된 글이 없습니다."}
               </div>
             ) : (
               <div className="divide-y">
@@ -246,9 +342,6 @@ const PostList: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-3">
-                      <span className="text-gray-400 text-sm group-hover:hidden">
-                        Example {">"}
-                      </span>
                       <button
                         onClick={(e) => handleDelete(post.path, e)}
                         className="hidden group-hover:block text-red-500 hover:bg-red-50 p-2 rounded transition"

@@ -376,7 +376,7 @@ export class OllamaInstaller {
             method: "GET",
             timeout: 300000,
             headers: {
-              "User-Agent": "AutoTistory-AI-Writer/1.0",
+              "User-Agent": "AutoStory-AI-Writer/1.0",
             },
           };
 
