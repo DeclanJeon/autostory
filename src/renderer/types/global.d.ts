@@ -5,7 +5,7 @@
  */
 export interface MaterialItem {
   id: string;
-  type: "link" | "file" | "text";
+  type: "link" | "file" | "text" | "post"; // [NEW] post 타입 추가
   value: string; // URL, 파일 경로, 또는 텍스트 내용
   title: string;
   addedAt: number;
@@ -248,10 +248,11 @@ export interface GenerateContentResult {
   success: boolean;
   filePath?: string;
   title?: string;
-  subtitle?: string; // [추가]
+  subtitle?: string; // [최종]
   published?: boolean;
   usedPrompt?: string;
   usedPersona?: string;
+  homeTheme?: string; // [NEW] 홈주제
   error?: string;
 }
 
@@ -261,6 +262,7 @@ export interface GenerateContentResult {
 export interface OneClickPublishOptions {
   mode: "random" | "queue";
   selectedIds?: string[];
+  homeTheme?: string;
 }
 
 /**
@@ -299,7 +301,7 @@ export interface SeriesGenerationResult {
 }
 
 /**
- * 시리즈 생성 진행 상황
+ * 시리즈 생성 진행 상태
  */
 export interface SeriesProgress {
   partNumber: number;
@@ -506,7 +508,7 @@ declare global {
       localAiUpdate: () => Promise<{ success: boolean; error?: string }>;
 
       // ============================================================
-      // [신규] 시리즈 생성 관련 API
+      // [NEW] 시리즈 생성 관련 API
       // ============================================================
 
       /**
@@ -523,7 +525,16 @@ declare global {
         tags: string[];
         category: string;
         autoPublish: boolean;
+        options?: {
+          useAiImage: boolean;
+        };
       }) => Promise<SeriesGenerationResult>;
+
+      // [NEW] 프리뷰용 핸들러 (선택 사항)
+      processFileWithImages: (data: {
+        filePath: string;
+        options: { useAiImage: boolean };
+      }) => Promise<any>;
 
       /**
        * 파일 처리 진행 상황 리스너
@@ -574,7 +585,7 @@ declare global {
       }>;
 
       // ============================================================
-      // 소재 관리 API (신규)
+      // 소재 관리 API (NEW)
       // ============================================================
       addMaterial: (data: {
         type: "link" | "file" | "text";
@@ -589,7 +600,7 @@ declare global {
       deleteMaterial: (id: string) => Promise<{ success: boolean }>;
 
       // ============================================================
-      // RSS 내보내기/불러오기 (신규)
+      // RSS 내보내기/불러오기 (NEW)
       // ============================================================
       exportRssFeeds: (content: string) => Promise<{
         success: boolean;
@@ -622,6 +633,26 @@ declare global {
       onBrowserDownloadError: (
         callback: (event: any, msg: string) => void
       ) => () => void;
+
+      // ============================================================
+      // [NEW] 홈주제 선택 관련 API
+      // ============================================================
+      getHomeThemes: () => Promise<string[]>;
+      selectHomeThemeBeforePublish: (data: {
+        title: string;
+        content: string;
+        selectedTheme: string;
+      }) => Promise<{
+        success: boolean;
+        theme: string;
+      }>;
+      getSuggestedHomeTheme: (data: {
+        title: string;
+        content: string;
+      }) => Promise<{
+        success: boolean;
+        theme: string;
+      }>;
     };
   }
 }

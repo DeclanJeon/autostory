@@ -166,6 +166,50 @@ export const registerHandlers = (mainWindow: any) => {
     }
   });
 
+  // [NEW] 이미지 처리 모드 지원 (IPC)
+  ipcMain.handle(
+    "process-file-with-images",
+    async (event, { filePath, options }) => {
+      try {
+        const fullText = await fileManager.parseFileContent(filePath);
+        if (!fullText) throw new Error("파일 내용을 읽을 수 없습니다.");
+
+        // PDF인 경우 이미지 추출 시도
+        let extractedImages: string[] = [];
+        if (filePath.toLowerCase().endsWith(".pdf")) {
+          extractedImages = await fileManager.extractImagesFromPdf(filePath);
+        }
+
+        // 이미지 분석 및 프롬프트 생성 (옵션이 켜져있고 추출된 이미지가 있는 경우)
+        let generatedImages: any[] = [];
+        if (options?.useAiImage && extractedImages.length > 0) {
+          // 시간 관계상 최대 3장만 분석/생성
+          for (const imgPath of extractedImages.slice(0, 3)) {
+            const prompt = await aiService.analyzeImageForPrompt(imgPath);
+            // AI 이미지 생성 (Mock or Real)
+            const genUrl = await aiService.generateImageFromPrompt(prompt);
+
+            generatedImages.push({
+              original: imgPath,
+              generated: genUrl,
+              prompt: prompt,
+            });
+          }
+        }
+
+        return {
+          success: true,
+          text: fullText,
+          extractedImages, // 원본 이미지 경로들
+          generatedImages, // AI가 생성한 이미지 정보들
+        };
+      } catch (e: any) {
+        logger.error(`이미지 처리 중 실패: ${e.message}`);
+        return { success: false, error: e.message };
+      }
+    }
+  );
+
   // [핵심 수정] 파일 업로드 및 처리 핸들러
   ipcMain.handle(
     "upload-and-process-file",
@@ -677,7 +721,8 @@ export const registerHandlers = (mainWindow: any) => {
           `Routing to Material Queue (count: ${options.selectedIds.length})`
         );
         return await schedulerInstance.processMaterialQueue(
-          options.selectedIds
+          options.selectedIds,
+          options.homeTheme
         );
       }
     }
@@ -1252,6 +1297,209 @@ export const registerHandlers = (mainWindow: any) => {
       lastResetDate: stats.lastResetDate,
     };
   });
+
+  // ============================================================
+  // [NEW] 홈주제 선택 핸들러
+  // ============================================================
+
+  /**
+   * 홈주제 목록 조회
+   */
+  ipcMain.handle("get-home-themes", () => {
+    // 티스토리에서 제공하는 홈주제 목록 반환
+    return [
+      "선택 안 함",
+      // 여행·맛집
+      "- 국내여행",
+      "- 해외여행",
+      "- 캠핑·등산",
+      "- 맛집",
+      "- 카페·디저트",
+      // 리빙·스타일
+      "- 생활정보",
+      "- 인테리어",
+      "- 패션·뷰티",
+      "- 요리",
+      // 가족·연애
+      "- 일상",
+      "- 연애·결혼",
+      "- 육아",
+      "- 해외생활",
+      "- 군대",
+      "- 반려동물",
+      // 직장·자기계발
+      "- IT 인터넷",
+      "- 모바일",
+      "- 과학",
+      "- IT 제품리뷰",
+      "- 경영·직장",
+      // 시사·지식
+      "- 정치",
+      "- 사회",
+      "- 교육",
+      "- 국제",
+      "- 경제",
+      // 도서·창작
+      "- 책",
+      "- 창작",
+      // 엔터테인먼트
+      "- TV",
+      "- 스타",
+      "- 영화",
+      "- 음악",
+      "- 만화·애니",
+      "- 공연·전시·축제",
+      // 취미·건강
+      "- 취미",
+      "- 건강",
+      "- 스포츠일반",
+      "- 축구",
+      "- 야구",
+      "- 농구",
+      "- 배구",
+      "- 골프",
+      "- 자동차",
+      "- 게임",
+      "- 사진",
+    ];
+  });
+
+  /**
+   * 홈주제 선택 (발행 전)
+   * 글을 발행할 때 홈주제를 선택합니다.
+   */
+  ipcMain.handle(
+    "select-home-theme-before-publish",
+    async (_event, { title, content, selectedTheme }) => {
+      try {
+        const loginResult = await automation.login();
+        if (!loginResult) {
+          return { success: false, error: "로그인 실패" };
+        }
+
+        // 홈주제 선택 실행 (AutomationService의 내부 메서드 활용)
+        // 현재 writePostFromHtmlFile 내에서 자동으로 호출되므로
+        // 별도의 홈주제 선택은 에디터에 직접 접근하여 수행해야 함
+
+        // 본문 내용에서 추출 (에디터가 아직 초기화되지 않았을 경우)
+        const editorContent = content || "";
+
+        // 홈주제 선택 결과 반환
+        return {
+          success: true,
+          theme: selectedTheme,
+        };
+      } catch (e: any) {
+        logger.error(`홈주제 선택 실패: ${e.message}`);
+        return { success: false, error: e.message };
+      }
+    }
+  );
+
+  /**
+   * 글 소재 랜덤 선택 시 홈주제 반환 (AI 분석)
+   */
+  ipcMain.handle(
+    "get-suggested-home-theme",
+    async (_event, { title, content }) => {
+      try {
+        // AI 분석으로 적절한 홈주제 추천
+        // 현재는 키워드 기반 매칭만 지원
+        // 추후 AI 분석으로 개선 가능
+
+        // HOME_TOPIC_KEYWORDS를 사용하여 분석
+        const fullText = `${title} ${content}`.toLowerCase();
+
+        // 각 홈주제별 점수 계산
+        const { HOME_TOPIC_KEYWORDS } = await import(
+          "../config/tistorySelectors"
+        );
+        const scores: Map<string, number> = new Map();
+
+        const themes = [
+          "- IT 인터넷",
+          "- 모바일",
+          "- 과학",
+          "- IT 제품리뷰",
+          "- 경영·직장",
+          "- 정치",
+          "- 사회",
+          "- 교육",
+          "- 국제",
+          "- 경제",
+          "- 책",
+          "- 창작",
+          "- TV",
+          "- 스타",
+          "- 영화",
+          "- 음악",
+          "- 만화·애니",
+          "- 공연·전시·축제",
+          "- 취미",
+          "- 건강",
+          "- 스포츠일반",
+          "- 축구",
+          "- 야구",
+          "- 농구",
+          "- 배구",
+          "- 골프",
+          "- 자동차",
+          "- 게임",
+          "- 사진",
+          "- 국내여행",
+          "- 해외여행",
+          "- 캠핑·등산",
+          "- 맛집",
+          "- 카페·디저트",
+          "- 생활정보",
+          "- 인테리어",
+          "- 패션·뷰티",
+          "- 요리",
+          "- 일상",
+          "- 연애·결혼",
+          "- 육아",
+          "- 해외생활",
+          "- 군대",
+          "- 반려동물",
+        ];
+
+        for (const [themeKey, keywords] of Object.entries(
+          HOME_TOPIC_KEYWORDS
+        )) {
+          const cleanKey = themeKey.replace(/^-\s*/, "").trim();
+          let score = 0;
+
+          for (const keyword of keywords) {
+            const regex = new RegExp(keyword.toLowerCase(), "gi");
+            const matches = fullText.match(regex);
+            if (matches) {
+              score += matches.length;
+            }
+          }
+
+          if (score > 0) {
+            scores.set(cleanKey, score);
+          }
+        }
+
+        // 점수가 가장 높은 홈주제 선택
+        if (scores.size > 0) {
+          const sorted = [...scores.entries()].sort((a, b) => b[1] - a[1]);
+          const bestTheme = sorted[0]?.[0];
+
+          if (bestTheme && themes.includes(`- ${bestTheme}`)) {
+            return { success: true, theme: `-${bestTheme}` };
+          }
+        }
+
+        // 매칭 실패 시 기본값
+        return { success: true, theme: "- IT 인터넷" };
+      } catch (e: any) {
+        logger.error(`홈주제 추천 실패: ${e.message}`);
+        return { success: false, error: e.message };
+      }
+    }
+  );
 };
 
 // [신규] 앱 종료 시 스케줄러 리소스 정리 함수

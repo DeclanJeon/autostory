@@ -41,7 +41,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   /** [신규] 레이아웃만 조회 */
   getLayouts: () => ipcRenderer.invoke("get-layouts"),
 
-  /** [신규] 피드 기반 프롬프트/페르소나 자동 선택 */
+  /** 피드 기반 프롬프트/페르소나 자동 선택 */
   autoSelectCombination: (feedContent: string) =>
     ipcRenderer.invoke("auto-select-combination", feedContent),
 
@@ -71,89 +71,65 @@ contextBridge.exposeInMainWorld("electronAPI", {
       templateDescription,
     }),
 
+  // 콘텐츠 생성
+  generateContent: (data: any) => ipcRenderer.invoke("generate-content", data),
+
+  // 링크 분석 및 글 생성
+  processLinkAndGenerate: (data: { url: string; category: string }) =>
+    ipcRenderer.invoke("process-link-and-generate", data),
+
+  // 발행
   publishLatestPost: () => ipcRenderer.invoke("publish-latest-post"),
   publishPost: (filePath: string, category: string) =>
     ipcRenderer.invoke("publish-post", { filePath, category }),
-  // [신규] 다중 플랫폼 발행
+
+  // ============================================================
+  // [NEW] 네이버 관련 API
+  // ============================================================
+
+  /**
+   * 네이버 로그인
+   */
+  startNaverLogin: () => ipcRenderer.invoke("start-naver-login"),
+
+  /**
+   * 다중 플랫폼 발행
+   */
   publishPostMulti: (data: {
     filePath: string;
     platforms: string[];
     category: string;
+    tags?: string[];
   }) => ipcRenderer.invoke("publish-post-multi", data),
-  generateContent: (data: any) => ipcRenderer.invoke("generate-content", data),
 
+  // 이미지 테스트
   testImageSearch: (params: { text: string }) =>
     ipcRenderer.invoke("test-image-search", params),
 
-  // [신규] 포스트 삭제
-  deletePost: (filePath: string) => ipcRenderer.invoke("delete-post", filePath),
-
-  // [신규] 파일 업로드 및 시리즈 생성
-  uploadAndProcessFile: (data: {
-    filePath: string;
-    title: string;
-    tags: string[];
-    category: string;
-    autoPublish: boolean;
-  }) => ipcRenderer.invoke("upload-and-process-file", data),
-
-  // [신규] 링크 분석 및 글 생성
-  processLinkAndGenerate: (data: { url: string; category: string }) =>
-    ipcRenderer.invoke("process-link-and-generate", data),
-
-  // [신규] 시리즈 생성 상태 조회
-  getSeriesGenerationStatus: () =>
-    ipcRenderer.invoke("get-series-generation-status"),
-
-  // [신규] 파일 처리 진행상황 이벤트
-  onFileProcessProgress: (callback: (event: any, msg: string) => void) => {
-    const subscription = (_event: any, msg: string) => callback(_event, msg);
-    ipcRenderer.on("file-process-progress", subscription);
-    return () =>
-      ipcRenderer.removeListener("file-process-progress", subscription);
-  },
-
-  // [신규] 시리즈 생성 진행 상세 리스너
-  onSeriesGenerationProgress: (
-    callback: (
-      event: any,
-      data: {
-        partNumber: number;
-        totalParts: number;
-        currentTitle: string;
-        subtitle: string;
-        stage:
-          | "analyzing"
-          | "generating"
-          | "saving"
-          | "publishing"
-          | "complete";
-      }
-    ) => void
-  ) => {
-    const subscription = (_event: any, data: any) => callback(_event, data);
-    ipcRenderer.on("series-generation-progress", subscription);
-    return () =>
-      ipcRenderer.removeListener("series-generation-progress", subscription);
-  },
-
-  // ============ 원클릭 자동 발행 ============
+  // 원클릭 발행 (옵션 추가)
   oneClickPublish: (options?: {
     mode: "random" | "queue";
     selectedIds?: string[];
+    homeTheme?: string;
   }) => ipcRenderer.invoke("one-click-publish", options),
 
-  // ============ 스케줄러 제어 ============
+  // ============================================================
+  // 스케줄러 제어
+  // ============================================================
   getSchedulerStatus: () => ipcRenderer.invoke("get-scheduler-status"),
   startScheduler: (intervalMinutes: number) =>
     ipcRenderer.invoke("start-scheduler", intervalMinutes),
   stopScheduler: () => ipcRenderer.invoke("stop-scheduler"),
 
-  // ============ 발행 취소 ============
+  // ============================================================
+  // 발행 취소
+  // ============================================================
   cancelPublish: () => ipcRenderer.invoke("cancel-publish"),
   getLoginState: () => ipcRenderer.invoke("get-login-state"),
 
-  // ============ 로컬 AI ============
+  // ============================================================
+  // 로컬 AI 제어
+  // ============================================================
   localAiStatus: () => ipcRenderer.invoke("local-ai-status"),
   localAiInstall: () => ipcRenderer.invoke("local-ai-install"),
   localAiStart: () => ipcRenderer.invoke("local-ai-start"),
@@ -220,7 +196,69 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("login-state-change", subscription);
   },
 
-  // ============ 브라우저 다운로드 ============
+  // ============================================================
+  // [NEW] 시리즈 생성 관련 API
+  // ============================================================
+
+  /**
+   * 파일 업로드 및 시리즈 생성
+   */
+  uploadAndProcessFile: (data: {
+    filePath: string;
+    title: string;
+    tags: string[];
+    category: string;
+    autoPublish: boolean;
+    options?: {
+      useAiImage: boolean;
+    };
+  }) => ipcRenderer.invoke("upload-and-process-file", data),
+
+  /**
+   * 파일 처리 진행상황 리스너
+   */
+  onFileProcessProgress: (callback: (event: any, msg: string) => void) => {
+    const subscription = (_event: any, msg: string) => callback(_event, msg);
+    ipcRenderer.on("file-process-progress", subscription);
+    return () =>
+      ipcRenderer.removeListener("file-process-progress", subscription);
+  },
+
+  /**
+   * 시리즈 생성 진행 리스너
+   */
+  onSeriesGenerationProgress: (
+    callback: (
+      event: any,
+      data: {
+        partNumber: number;
+        totalParts: number;
+        currentTitle: string;
+        subtitle: string;
+        stage:
+          | "analyzing"
+          | "generating"
+          | "saving"
+          | "publishing"
+          | "complete";
+      }
+    ) => void
+  ) => {
+    const subscription = (_event: any, data: any) => callback(_event, data);
+    ipcRenderer.on("series-generation-progress", subscription);
+    return () =>
+      ipcRenderer.removeListener("series-generation-progress", subscription);
+  },
+
+  /**
+   * 시리즈 생성 상태 조회
+   */
+  getSeriesGenerationStatus: () =>
+    ipcRenderer.invoke("get-series-generation-status"),
+
+  // ============================================================
+  // 브라우저 다운로드
+  // ============================================================
   onBrowserDownloadStart: (callback: () => void) => {
     const subscription = (_event: any) => callback();
     ipcRenderer.on("browser-download-start", subscription);
@@ -242,7 +280,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeAllListeners("browser-download-error");
   },
 
-  // [신규] RSS 내보내기/불러오기
+  // ============================================================
+  // [NEW] RSS 내보내기/불러오기
+  // ============================================================
   exportRssFeeds: (content: string) =>
     ipcRenderer.invoke("export-rss-feeds", content),
   importRssFeeds: () => ipcRenderer.invoke("import-rss-feeds"),
@@ -255,4 +295,31 @@ contextBridge.exposeInMainWorld("electronAPI", {
    * 일일 발행량 통계 조회
    */
   getDailyStats: () => ipcRenderer.invoke("get-daily-stats"),
+
+  // ============================================================
+  // [NEW] 소재 관리 API
+  // ============================================================
+  addMaterial: (data: {
+    type: "link" | "file" | "text";
+    value: string;
+    title: string;
+    category?: string;
+    tags?: string[];
+  }) => ipcRenderer.invoke("add-material", data),
+
+  getMaterials: () => ipcRenderer.invoke("get-materials"),
+
+  deleteMaterial: (id: string) => ipcRenderer.invoke("delete-material", id),
+
+  // ============================================================
+  // [NEW] 홈주제 선택 관련 API
+  // ============================================================
+  getHomeThemes: () => ipcRenderer.invoke("get-home-themes"),
+  selectHomeThemeBeforePublish: (data: {
+    title: string;
+    content: string;
+    selectedTheme: string;
+  }) => ipcRenderer.invoke("select-home-theme-before-publish", data),
+  getSuggestedHomeTheme: (data: { title: string; content: string }) =>
+    ipcRenderer.invoke("get-suggested-home-theme", data),
 });

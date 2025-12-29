@@ -4,6 +4,7 @@ import { app, dialog } from "electron";
 import { logger } from "../utils/logger";
 import store from "../config/store";
 import { createWorker } from "tesseract.js";
+import { v4 as uuidv4 } from "uuid";
 import https from "https"; // 다운로드를 위해 추가
 const { createCanvas, Canvas, Image, ImageData } = require("@napi-rs/canvas");
 
@@ -99,10 +100,110 @@ export class FileManager {
   private tessDataDir: string;
 
   constructor() {
-    // 앱 데이터 폴더 내 'posts' 디렉토리 사용
     this.baseDir = path.join(app.getPath("userData"), "posts");
-    // Tesseract 언어 데이터 저장 경로 (캐싱용)
     this.tessDataDir = app.getPath("userData");
+  }
+
+  /**
+   * [NEW] PDF 파일에서 이미지를 추출하여 저장합니다.
+   * @param filePath PDF 파일 경로
+   * @returns 저장된 이미지 파일의 경로 배열
+   */
+  public async extractImagesFromPdf(filePath: string): Promise<string[]> {
+    const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.js");
+    const data = new Uint8Array(await fs.readFile(filePath));
+    const savedImagePaths: string[] = [];
+
+    try {
+      // 임시 저장 폴더 생성 (userData/temp_images/{uuid})
+      const jobId = uuidv4();
+      const outputDir = path.join(
+        app.getPath("userData"),
+        "temp_images",
+        jobId
+      );
+      await fs.ensureDir(outputDir);
+
+      const loadingTask = pdfjsLib.getDocument({
+        data,
+        disableFontFace: true,
+        verbosity: 0,
+      });
+      const doc = await loadingTask.promise;
+
+      logger.info(`Extracting images from PDF: ${doc.numPages} pages`);
+
+      for (let i = 1; i <= doc.numPages; i++) {
+        const page = await doc.getPage(i);
+        const ops = await page.getOperatorList();
+
+        const fns = ops.fn;
+        const args = ops.args;
+
+        for (let j = 0; j < fns.length; j++) {
+          // paintImageXObject (JPEG 등) 또는 paintInlineImageXObject 확인
+          if (
+            fns[j] === pdfjsLib.OPS.paintImageXObject ||
+            fns[j] === pdfjsLib.OPS.paintInlineImageXObject
+          ) {
+            const imgName = args[j][0];
+
+            try {
+              // 이미지 객체 가져오기
+              const imgObj = await page.objs.get(imgName);
+
+              if (imgObj && imgObj.data) {
+                const { width, height, data: imgData } = imgObj;
+
+                // 너무 작은 아이콘/노이즈 제거 (100x100 이하)
+                if (width < 100 || height < 100) continue;
+
+                // Canvas 생성 및 그리기
+                const canvas = createCanvas(width, height);
+                const ctx = canvas.getContext("2d");
+
+                // RGB vs RGBA 처리 (PDF 이미지는 보통 RGB가 많음)
+                const imageData = ctx.createImageData(width, height);
+
+                if (imgData.length === width * height * 3) {
+                  // RGB -> RGBA 변환
+                  for (let k = 0, l = 0; k < imgData.length; k += 3, l += 4) {
+                    imageData.data[l] = imgData[k]; // R
+                    imageData.data[l + 1] = imgData[k + 1]; // G
+                    imageData.data[l + 2] = imgData[k + 2]; // B
+                    imageData.data[l + 3] = 255; // Alpha
+                  }
+                } else if (imgData.length === width * height * 4) {
+                  // 이미 RGBA인 경우
+                  for (let k = 0; k < imgData.length; k++) {
+                    imageData.data[k] = imgData[k];
+                  }
+                }
+
+                ctx.putImageData(imageData, 0, 0);
+
+                const fileName = `img_p${i}_${j}_${uuidv4().slice(0, 8)}.png`;
+                const savePath = path.join(outputDir, fileName);
+                const buffer = canvas.toBuffer("image/png");
+
+                await fs.writeFile(savePath, buffer);
+                savedImagePaths.push(savePath);
+                logger.info(`Image extracted: ${savePath}`);
+              }
+            } catch (err: any) {
+              logger.warn(
+                `Failed to extract image on page ${i}: ${err.message}`
+              );
+            }
+          }
+        }
+      }
+
+      return savedImagePaths;
+    } catch (error: any) {
+      logger.error(`PDF Image Extraction Error: ${error.message}`);
+      return [];
+    }
   }
 
   // [OPTIMIZATION] 캐시 무효화 메소드

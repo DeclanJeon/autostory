@@ -14,6 +14,8 @@ import path from "path";
 import fs from "fs-extra";
 import { NaverService } from "./NaverService";
 import { YoutubeTranscript } from "youtube-transcript";
+import * as cheerio from "cheerio";
+import { HOME_TOPICS } from "../config/homeTopics";
 
 export type LoginState = "logged-in" | "logged-out" | "logging-in" | "unknown";
 
@@ -1567,7 +1569,8 @@ export class AutomationService {
     title: string,
     categoryName: string,
     htmlContent?: string,
-    reservationDate?: Date
+    reservationDate?: Date,
+    homeTheme?: string
   ): Promise<void> {
     this.publishAbortController = new AbortController();
     const signal = this.publishAbortController.signal;
@@ -1608,10 +1611,17 @@ export class AutomationService {
         bodyContent
       );
 
+      // [NEW] 로컬 이미지 경로를 Base64로 변환 (에디터 삽입용)
+      sendLogToRenderer(this.mainWindow, "이미지 인코딩 변환 중...");
+      const finalContent = await this.convertLocalImagesToBase64(
+        processedContent
+      );
+
+      // [FIX] 파일 업데이트 (전체 HTML 구조 유지) - originalHtml 사용
       // [FIX] 파일 업데이트 (전체 HTML 구조 유지) - originalHtml 사용
       const updatedHtml = originalHtml.replace(
         /<body[^>]*>[\s\S]*?<\/body>/i,
-        `<body>${processedContent}</body>`
+        `<body>${finalContent}</body>`
       );
       await fs.writeFile(filePath, updatedHtml, "utf-8");
       sendLogToRenderer(this.mainWindow, "이미지 처리 완료");
@@ -1704,7 +1714,8 @@ export class AutomationService {
 
       // [핵심 변경] 클립보드 대신 직접 HTML 삽입
       sendLogToRenderer(this.mainWindow, "본문 콘텐츠 삽입 중...");
-      await this.insertContentToEditor(page, processedContent, modifier);
+      sendLogToRenderer(this.mainWindow, "본문 콘텐츠 삽입 중...");
+      await this.insertContentToEditor(page, finalContent, modifier);
 
       sendLogToRenderer(this.mainWindow, "본문 삽입 완료.");
 
@@ -1725,17 +1736,26 @@ export class AutomationService {
       } catch (e) {
         logger.warn("에디터 콘텐츠 추출 실패, 원본 콘텐츠 사용");
         // HTML 태그 제거
-        editorTextContent = processedContent
+        // HTML 태그 제거
+        editorTextContent = finalContent
           .replace(/<[^>]*>/g, " ")
           .replace(/\s+/g, " ")
           .substring(0, 2000);
       }
 
+      // [NEW] 대표 이미지 설정 (본문 첫 번째 이미지)
+      await this.setRepresentativeImage(page);
+
       // [FIX] 발행 순서 수정: 완료 버튼 클릭 -> (레이어 팝업) -> 홈주제 선택 -> 최종 발행
       await this.clickCompleteButton(page);
       await page.waitForTimeout(2000); // 레이어 애니메이션 대기
 
-      await this.selectHomeTheme(page, cleanTitle, editorTextContent);
+      await this.selectHomeTheme(
+        page,
+        cleanTitle,
+        editorTextContent,
+        homeTheme
+      );
 
       // 예약 발행인 경우 예약 설정 처리
       if (reservationDate) {
@@ -2532,8 +2552,8 @@ ${themes.map((theme, index) => `${index + 1}. ${theme}`).join("\n")}
         transcriptText = transcriptItems
           .map((t) => t.text)
           .join(" ")
-          .replace(/&amp;#39;/g, "'")
-          .replace(/&amp;quot;/g, '"')
+          .replace(/&#39;/g, "'")
+          .replace(/&quot;/g, '"')
           .trim();
 
         if (transcriptText.length > 50) {
@@ -3306,140 +3326,6 @@ ${themes.map((theme, index) => `${index + 1}. ${theme}`).join("\n")}
   }
 
   /**
-   * 기존 pasteToWysiwygEditor 메서드 (하위 호환성을 위해 유지)
-   * @deprecated insertContentToEditor 사용 권장
-   */
-  private async pasteToWysiwygEditor(
-    page: Page,
-    modifier: string,
-    expectedContentLength: number = 0
-  ): Promise<void> {
-    const MAX_RETRY_COUNT = 3;
-    let retryCount = 0;
-    let pasteSuccess = false;
-
-    while (retryCount < MAX_RETRY_COUNT && !pasteSuccess) {
-      retryCount++;
-
-      try {
-        sendLogToRenderer(
-          this.mainWindow,
-          `본문 붙여넣기 시도 ${retryCount}/${MAX_RETRY_COUNT}...`
-        );
-
-        const iframeSelector = "#editor-tistory_ifr";
-        await page.waitForSelector(iframeSelector, { timeout: 10000 });
-
-        const frame = page.frameLocator(iframeSelector);
-        const editorBody = frame.locator("body#tinymce");
-        await editorBody.waitFor({ timeout: 5000 });
-
-        // 1. 에디터 클릭하여 포커스
-        await editorBody.click();
-        await page.waitForTimeout(300);
-
-        // 2. 기존 콘텐츠 완전히 삭제
-        await page.keyboard.press(`${modifier}+a`);
-        await page.waitForTimeout(100);
-        await page.keyboard.press("Backspace");
-        await page.waitForTimeout(300);
-
-        // 3. 에디터가 비어있는지 확인
-        const beforePasteContent = await frame
-          .locator("body#tinymce")
-          .evaluate((el) => el.innerHTML.trim());
-
-        if (beforePasteContent.length > 100) {
-          logger.warn("에디터 초기화 재시도...");
-          await editorBody.click();
-          await page.keyboard.press(`${modifier}+a`);
-          await page.keyboard.press("Delete");
-          await page.waitForTimeout(300);
-        }
-
-        // 4. 붙여넣기 실행
-        await page.keyboard.press(`${modifier}+v`);
-        await page.waitForTimeout(3000);
-
-        // 5. 붙여넣기 결과 검증
-        const afterPasteContent = await frame
-          .locator("body#tinymce")
-          .evaluate((el) => el.innerHTML);
-
-        const contentLength = afterPasteContent.length;
-        const hasImages = afterPasteContent.includes("<img");
-        const hasParagraphs = (afterPasteContent.match(/<p[^>]*>/gi) || [])
-          .length;
-        const hasHeadings = (afterPasteContent.match(/<h[1-6][^>]*>/gi) || [])
-          .length;
-
-        logger.info(
-          `붙여넣기 결과: 길이=${contentLength}, 이미지=${hasImages}, 단락=${hasParagraphs}, 제목=${hasHeadings}`
-        );
-
-        // 성공 기준: 500자 이상, 문단 2개 이상
-        // 추가: 예상 길이의 최소 30% 이상이어야 함 (클립보드 데이터 무결성 검증)
-        const minExpectedLength =
-          expectedContentLength > 0
-            ? Math.min(500, expectedContentLength * 0.3)
-            : 500;
-
-        if (contentLength >= minExpectedLength && hasParagraphs >= 2) {
-          pasteSuccess = true;
-          sendLogToRenderer(
-            this.mainWindow,
-            `✅ 본문 붙여넣기 성공 (${contentLength}자, ${hasParagraphs}개 단락)`
-          );
-        } else {
-          logger.warn(
-            `붙여넣기 검증 실패: ${contentLength}자 (최소 ${minExpectedLength}), ${hasParagraphs}개 문단`
-          );
-
-          if (retryCount < MAX_RETRY_COUNT) {
-            sendLogToRenderer(
-              this.mainWindow,
-              `⚠️ 본문 내용 부족, 재시도 준비 중...`
-            );
-
-            // 에디터 초기화 후 대기
-            await editorBody.click();
-            await page.keyboard.press(`${modifier}+a`);
-            await page.keyboard.press("Backspace");
-            await page.waitForTimeout(500);
-          }
-        }
-      } catch (e: any) {
-        logger.error(`붙여넣기 시도 ${retryCount} 실패: ${e.message}`);
-
-        if (retryCount < MAX_RETRY_COUNT) {
-          sendLogToRenderer(
-            this.mainWindow,
-            `⚠️ 붙여넣기 오류, 재시도 준비 중...`
-          );
-          await page.waitForTimeout(1000);
-        }
-      }
-    }
-
-    // 3번 모두 실패한 경우 대체 방법 시도
-    if (!pasteSuccess) {
-      sendLogToRenderer(
-        this.mainWindow,
-        "⚠️ 기본 방법 실패, 대체 방법으로 붙여넣기 시도..."
-      );
-
-      try {
-        await this.pasteWithAlternativeMethod(page, modifier);
-      } catch (altError: any) {
-        logger.error(`대체 붙여넣기도 실패: ${altError.message}`);
-        throw new Error(
-          `본문 붙여넣기 실패 (${MAX_RETRY_COUNT}회 시도 후 실패)`
-        );
-      }
-    }
-  }
-
-  /**
    * [개선] 카테고리 선택 - 다층 매칭 알고리즘 적용
    *
    * 매칭 우선순위:
@@ -3647,7 +3533,8 @@ ${themes.map((theme, index) => `${index + 1}. ${theme}`).join("\n")}
   private async selectHomeTheme(
     page: Page,
     title: string,
-    content: string
+    content: string,
+    targetTheme?: string
   ): Promise<void> {
     try {
       sendLogToRenderer(this.mainWindow, "홈주제 선택 시작...");
@@ -3737,13 +3624,38 @@ ${themes.map((theme, index) => `${index + 1}. ${theme}`).join("\n")}
           .join(", ")}...`
       );
 
-      // Step 5: AI를 통해 가장 적합한 홈주제 선택
+      // Step 5: 홈주제 결정 (사용자 지정 > AI 추천)
       const themeNames = availableThemes.map((t) => t.text);
-      const bestTheme = await this.selectBestThemeWithAI(
-        title,
-        content,
-        themeNames
-      );
+      let bestTheme: string | null = null;
+
+      if (targetTheme && targetTheme !== "선택 안 함") {
+        logger.info(`[홈주제] 사용자 지정 테마 우선 적용: "${targetTheme}"`);
+        // 정확히 매칭되거나 포함되는 테마 찾기
+        const exactMatch = availableThemes.find((t) => t.text === targetTheme);
+        if (exactMatch) {
+          bestTheme = exactMatch.text;
+        } else {
+          // "국내여행" -> "- 국내여행" 같은 경우 처리
+          const partialMatch = availableThemes.find((t) =>
+            t.text.includes(targetTheme)
+          );
+          if (partialMatch) {
+            bestTheme = partialMatch.text;
+          } else {
+            logger.warn(
+              `[홈주제] 지정된 테마 "${targetTheme}"를 목록에서 찾을 수 없어 AI 추천으로 전환합니다.`
+            );
+          }
+        }
+      }
+
+      if (!bestTheme) {
+        bestTheme = await this.selectBestThemeWithAI(
+          title,
+          content,
+          themeNames
+        );
+      }
 
       logger.info(`AI 추천 홈주제: "${bestTheme}"`);
 
@@ -3997,5 +3909,162 @@ ${themes.map((theme, index) => `${index + 1}. ${theme}`).join("\n")}
       this.mainWindow,
       `✅ 대체 방법으로 붙여넣기 성공 (${content.length}자)`
     );
+  }
+
+  /**
+   * [NEW] 대표 이미지 설정
+   *
+   * 본문 첫 번째 이미지를 잘라내서 다시 붙이고
+   * 티스토리 캐시 후 대표 이미지 체크박스를 클릭합니다.
+   *
+   * @param page - Playwright Page 객체
+   */
+  private async setRepresentativeImage(page: Page): Promise<void> {
+    try {
+      sendLogToRenderer(this.mainWindow, "대표 이미지 설정 중...");
+
+      const frame = page.frameLocator("#editor-tistory_ifr");
+      const body = frame.locator("body#tinymce");
+
+      // 1. 첫 번째 이미지 찾기
+      const firstImage = body.locator("img:first-child");
+
+      const exists = (await firstImage.count()) > 0;
+      if (!exists) {
+        logger.warn("에디터에 이미지가 없습니다. 대표 이미지 설정 스킵.");
+        return;
+      }
+
+      // 2. 이미지 HTML 가져오기
+      const imageHtml = await firstImage.evaluate(
+        (img: HTMLImageElement) => img.outerHTML
+      );
+
+      logger.info(
+        `첫 번째 이미지 HTML 추출 완료: ${imageHtml.substring(0, 100)}...`
+      );
+
+      // 3. 이미지 잘라내기 (Cut) 및 붙이기 (Paste)
+      await firstImage.click();
+      await page.waitForTimeout(200);
+
+      // 전체 선택
+      await page.keyboard.press(
+        `${process.platform === "darwin" ? "Meta" : "Control"}+a`
+      );
+      await page.waitForTimeout(100);
+
+      // 잘라내기
+      await page.keyboard.press(
+        `${process.platform === "darwin" ? "Meta" : "Control"}+x`
+      );
+      await page.waitForTimeout(200);
+
+      // 붙이기
+      await page.keyboard.press(
+        `${process.platform === "darwin" ? "Meta" : "Control"}+v`
+      );
+      await page.waitForTimeout(2000);
+
+      // 4. 티스토리 캐시 대기
+      // 이미지가 캐시되면 대표 이미지 체크박스가 활성화됨
+      logger.info("티스토리 이미지 캐시 대기 중...");
+      await page.waitForTimeout(3000);
+
+      // 5. 대표 이미지 체크박스 클릭
+      // .mce-represent-image-btn.active 또는 .mce-represent-image-btn 요소 찾기
+      // 먼저 활성화된 체크박스가 있는지 확인
+      try {
+        await page.waitForTimeout(1000);
+
+        const activeCheckbox = page.locator(".mce-represent-image-btn.active");
+        const activeExists = (await activeCheckbox.count()) > 0;
+
+        if (activeExists) {
+          sendLogToRenderer(
+            this.mainWindow,
+            "✅ 대표 이미지 체크박스가 이미 활성화되어 있습니다."
+          );
+          return;
+        }
+
+        // 체크박스 활성화되지 않은 경우, 이미지 다시 클릭
+        logger.info("대표 이미지 체크박스 찾기 위해 이미지 클릭 중...");
+
+        // 첫 번째 이미지 클릭
+        const clickedImage = body.locator("img:first-child");
+        const clickedExists = (await clickedImage.count()) > 0;
+        if (clickedExists) {
+          await clickedImage.click();
+          await page.waitForTimeout(500);
+        }
+
+        // 활성화된 체크박스 찾기
+        await page.waitForTimeout(1000);
+        const checkbox = page.locator(".mce-represent-image-btn.active");
+        const checkboxExists = (await checkbox.count()) > 0;
+
+        if (checkboxExists) {
+          await checkbox.click();
+          sendLogToRenderer(
+            this.mainWindow,
+            "✅ 대표 이미지 체크박스 클릭 완료"
+          );
+        } else {
+          logger.warn("대표 이미지 체크박스를 찾을 수 없습니다.");
+        }
+      } catch (e) {
+        logger.warn(`대표 이미지 체크박스 클릭 중 오류: ${e.message}`);
+      }
+    } catch (error: any) {
+      logger.warn(`대표 이미지 설정 중 오류: ${error.message}`);
+      sendLogToRenderer(this.mainWindow, "대표 이미지 설정 실패 (계속 진행)");
+    }
+  }
+
+  /**
+   * [NEW] 로컬 이미지(file://)를 Base64로 변환하여 HTML에 임베딩
+   */
+  private async convertLocalImagesToBase64(
+    htmlContent: string
+  ): Promise<string> {
+    const $ = cheerio.load(htmlContent);
+    const images = $("img");
+    let convertedCount = 0;
+
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i];
+      const src = $(img).attr("src");
+
+      // file:// 프로토콜 또는 절대 경로인 경우 처리
+      if (src && (src.startsWith("file://") || path.isAbsolute(src))) {
+        try {
+          const cleanPath = src.replace(/^file:\/\//, "");
+          const decodedPath = decodeURIComponent(cleanPath);
+
+          if (await fs.pathExists(decodedPath)) {
+            const buffer = await fs.readFile(decodedPath);
+            const base64 = buffer.toString("base64");
+            // 확장자 확인
+            const ext = path.extname(decodedPath).toLowerCase();
+            const mimeType =
+              ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : "image/png";
+
+            $(img).attr("src", `data:${mimeType};base64,${base64}`);
+            convertedCount++;
+          }
+        } catch (e: any) {
+          logger.warn(
+            `Failed to convert image to Base64: ${src} - ${e.message}`
+          );
+        }
+      }
+    }
+
+    if (convertedCount > 0) {
+      logger.info(`Converted ${convertedCount} local images to Base64`);
+    }
+
+    return $("body").html() || $.html();
   }
 }

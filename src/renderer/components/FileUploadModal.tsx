@@ -29,6 +29,7 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
   const [tags, setTags] = useState("");
   const [category, setCategory] = useState("General");
   const [autoPublish, setAutoPublish] = useState(false);
+  const [useAiImage, setUseAiImage] = useState(false); // [NEW] AI 이미지 모드
 
   // 처리 상태
   const [isProcessing, setIsProcessing] = useState(false);
@@ -113,6 +114,9 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
           .filter((t) => t),
         category,
         autoPublish,
+        options: {
+          useAiImage,
+        },
       });
 
       if (result.success) {
@@ -343,6 +347,44 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
                     간격)
                   </p>
                 </label>
+              </div>
+
+              {/* [NEW] 이미지 처리 모드 선택 */}
+              <div className="flex flex-col space-y-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <label className="text-sm font-bold text-gray-700 block">
+                  🖼️ 이미지 처리 모드
+                </label>
+                <div className="flex gap-4">
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="imageMode"
+                      checked={!useAiImage}
+                      onChange={() => setUseAiImage(false)}
+                      className="form-radio text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-800">
+                      📸 원본 캡처 모드 (권장)
+                    </span>
+                  </label>
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="imageMode"
+                      checked={useAiImage}
+                      onChange={() => setUseAiImage(true)}
+                      className="form-radio text-purple-600 focus:ring-purple-500"
+                    />
+                    <span className="text-sm text-gray-800">
+                      ✨ AI 생성 모드 (베타)
+                    </span>
+                  </label>
+                </div>
+                <p className="text-xs text-gray-500">
+                  {useAiImage
+                    ? "문서의 이미지를 분석하여 AI가 새로운 이미지를 생성합니다. (창작성 높음)"
+                    : "문서에서 추출한 원본 이미지를 그대로 사용합니다. (정확성 높음)"}
+                </p>
               </div>
             </div>
           ) : (

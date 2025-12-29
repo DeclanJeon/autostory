@@ -14,6 +14,7 @@ export interface FeedItem {
 
 export class RssService {
   private parser: Parser;
+  private readonly FEED_TIMEOUT = 15000; // [NEW] 15초 타임아웃
 
   constructor() {
     this.parser = new Parser({
@@ -24,8 +25,24 @@ export class RssService {
       },
       requestOptions: {
         rejectUnauthorized: false,
+        timeout: this.FEED_TIMEOUT, // [NEW] 타임아웃 설정
       },
     });
+  }
+
+  /**
+   * [NEW] 단일 RSS 피드 요청에 타임아웃 적용
+   */
+  private async fetchWithTimeout<T>(
+    promise: Promise<T>,
+    timeout: number
+  ): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error("Request timeout")), timeout)
+      ),
+    ]);
   }
 
   public async fetchAllFeeds(
@@ -56,9 +73,15 @@ export class RssService {
 
     logger.info(`RSS 수집 시작: ${urls.length}개의 소스`);
 
+    // [NEW] 각 피드 요청에 개별 타임아웃 적용
     const feedPromises = urls.map(async (url) => {
       try {
-        const feed = await this.parser.parseURL(url);
+        const feedPromise = this.parser.parseURL(url);
+        const feed = await this.fetchWithTimeout(
+          feedPromise,
+          this.FEED_TIMEOUT
+        );
+
         const items = feed.items.map((item) => ({
           title: item.title || "No Title",
           link: item.link || "",
@@ -71,11 +94,16 @@ export class RssService {
         }));
         return items;
       } catch (error) {
-        logger.error(`RSS 파싱 실패 (${url}): ${error}`);
-        return [];
+        logger.error(
+          `RSS 파싱 실패 (${url}): ${
+            error instanceof Error ? error.message : error
+          }`
+        );
+        return []; // [NEW] 실패 시 빈 배열 반환하여 계속 진행
       }
     });
 
+    // [NEW] 모든 요청 완료 대기 (타임아웃된 것들은 빈 배열로 처리됨)
     const results = await Promise.all(feedPromises);
     const allItems = results.flat().sort((a, b) => {
       return new Date(b.isoDate).getTime() - new Date(a.isoDate).getTime();

@@ -51,12 +51,14 @@ export class SchedulerService {
   private isCancelled: boolean = false;
   private powerBlockerId: number | null = null;
   private automation: AutomationService;
+  private aiService: AiService;
   private currentJobId: string | null = null;
 
   constructor(window: any) {
     this.mainWindow = window;
     this.automation = AutomationService.getInstance();
     this.automation.setMainWindow(window);
+    this.aiService = new AiService();
 
     // 앱 시작 시, 비정상 종료로 멈춘 작업 복구
     jobQueue.resetStuckJobs();
@@ -226,12 +228,16 @@ export class SchedulerService {
 
       if (!job) {
         logger.info("No pending jobs in queue.");
+        this.updateStage("idle", "모든 대기열 작업이 완료되었습니다.");
         return;
       }
 
       logger.info(`🚀 Starting Job: ${job.id} (${job.type})`);
       jobQueue.updateJobStatus(job.id, "PROCESSING");
       this.currentJobId = job.id;
+
+      // 발행 진행 상태 업데이트
+      this.updateStage("checking-auth", `작업 시작: ${job.type}`);
 
       sendLogToRenderer(
         this.mainWindow,
@@ -300,7 +306,8 @@ export class SchedulerService {
     filePath: string,
     title: string,
     category: string,
-    htmlContent: string
+    htmlContent: string,
+    homeTheme?: string
   ): Promise<void> {
     // 1. 날짜 체크 및 구조 초기화
     UsageManager.ensureStructureAndDate();
@@ -353,8 +360,9 @@ export class SchedulerService {
             filePath,
             title,
             category,
-            undefined,
-            reservationDate
+            htmlContent,
+            reservationDate,
+            homeTheme // [NEW] 홈주제 전달
           );
 
           results.push(isReservation ? "Tistory(예약)" : "Tistory");
@@ -527,12 +535,23 @@ export class SchedulerService {
     const material = materials.find((m) => m.id === materialId);
 
     if (!material) {
+      // [NEW] materials 스토어에서 찾지 못하면 PostList 파일인지 확인
+      // materialId가 파일 경로 형식인 경우 PostList의 글로 간주
+      if (
+        materialId &&
+        (materialId.includes("/") || materialId.includes("\\"))
+      ) {
+        return await this.executePostListPublishJob(
+          materialId,
+          job.data.homeTheme
+        );
+      }
       throw new Error(`소재를 찾을 수 없습니다: ${materialId}`);
     }
 
     this.updateStage("generating-content", `소재 발행: "${material.title}"`);
 
-    // 1. 소재 내용 가져오기
+    //1. 소재 내용 가져오기
     let contentToAnalyze = "";
     let sourceName = "Material";
 
@@ -560,12 +579,12 @@ export class SchedulerService {
       throw new Error("분석할 콘텐츠 내용이 비어있습니다.");
     }
 
-    // 2. 스타일 자동 선택
+    //2. 스타일 자동 선택
     const dynamicSelection = aiService.autoSelectCombination(
       contentToAnalyze.substring(0, 1000)
     );
 
-    // 3. AI 생성
+    //3. AI 생성
     const virtualIssue = {
       title: material.title,
       source: sourceName,
@@ -584,7 +603,7 @@ export class SchedulerService {
       throw new Error("AI 콘텐츠 생성 실패 (내용 부족)");
     }
 
-    // 4. 이미지 처리
+    //4. 이미지 처리
     let finalContent = content;
     const usedImageUrls = new Set<string>();
 
@@ -605,14 +624,14 @@ export class SchedulerService {
       }
     }
 
-    // 5. AI 기반 카테고리 자동 분류
+    //5. AI 기반 카테고리 자동 분류
     this.updateStage("generating-content", "AI가 적절한 카테고리를 분석 중...");
     const determinedCategory = await aiService.classifyCategory(content);
 
     logger.info(`🗂️ 카테고리 결정: "${title}" -> [${determinedCategory}]`);
     sendLogToRenderer(this.mainWindow, `🗂️ 카테고리: ${determinedCategory}`);
 
-    // 6. 저장
+    //6. 저장
     const filePath = await fileManager.savePost(
       determinedCategory,
       title,
@@ -620,12 +639,13 @@ export class SchedulerService {
       "html"
     );
 
-    // 7. [변경] 다중 플랫폼 발행 호출
+    //7. [변경] 다중 플랫폼 발행 호출
     await this.publishToPlatforms(
       filePath,
       title,
       determinedCategory,
-      finalContent
+      finalContent,
+      job.data.homeTheme // [NEW] 홈주제 전달
     );
 
     // [NEW] 소재가 링크 타입이면 히스토리에 저장
@@ -633,12 +653,67 @@ export class SchedulerService {
       addToPublishedHistory(material.value);
     }
 
-    // 8. 성공 시 소재 리스트에서 제거
+    //8. 성공 시 소재 리스트에서 제거
     const currentMaterials = store.get("materials") || [];
     store.set(
       "materials",
       currentMaterials.filter((m) => m.id !== materialId)
     );
+  }
+
+  /**
+   * [NEW] PostList 글 발행 작업 실행
+   * 이미 저장된 파일을 바로 발행합니다.
+   */
+  private async executePostListPublishJob(
+    filePath: string,
+    homeTheme?: string
+  ): Promise<void> {
+    const fileManager = new FileManager();
+
+    try {
+      this.updateStage("generating-content", `PostList 글 발행: ${filePath}`);
+
+      // 1. 파일에서 제목과 내용 추출
+      const content = await fileManager.readPost(filePath);
+      const { title, body } = fileManager.extractTitleAndBody(
+        filePath,
+        content
+      );
+
+      if (!title || !body) {
+        throw new Error("파일에서 제목 또는 내용을 추출할 수 없습니다.");
+      }
+
+      // 2. AI 기반 카테고리 자동 분류
+      this.updateStage(
+        "generating-content",
+        "AI가 적절한 카테고리를 분석 중..."
+      );
+      const determinedCategory = await this.aiService.classifyCategory(content);
+
+      logger.info(
+        `🗂️ PostList 카테고리 결정: "${title}" -> [${determinedCategory}]`
+      );
+      sendLogToRenderer(this.mainWindow, `🗂️ 카테고리: ${determinedCategory}`);
+
+      // 3. HTML 내용 정리 (이미지 처리는 이미 되어있는 것으로 간주)
+      const finalContent = body;
+
+      // 4. 다중 플랫폼 발행
+      await this.publishToPlatforms(
+        filePath,
+        title,
+        determinedCategory,
+        finalContent,
+        homeTheme
+      );
+
+      logger.info(`✅ PostList 발행 완료: ${title}`);
+    } catch (error: any) {
+      logger.error(`❌ PostList 발행 실패: ${error.message}`);
+      throw error;
+    }
   }
 
   /**
@@ -682,22 +757,35 @@ export class SchedulerService {
   /**
    * 선택된 소재 일괄 처리 (기존 API 호환성 유지)
    */
-  public async processMaterialQueue(selectedIds: string[]): Promise<any> {
+  public async processMaterialQueue(
+    selectedIds: string[],
+    homeTheme?: string
+  ): Promise<any> {
     if (this.isProcessing) {
       return { success: false, error: "이미 작업이 진행 중입니다." };
     }
 
     const materials = store.get("materials") || [];
-    const targets = materials.filter((m) => selectedIds.includes(m.id));
+    const validMaterialIds = new Set(materials.map((m) => m.id));
+
+    // [FIX] 소재 스토어에 있거나, 파일 경로 형태인 경우 모두 유효한 타겟으로 인정
+    const targets = selectedIds.filter((id) => {
+      // 1. 등록된 소재 ID인 경우
+      if (validMaterialIds.has(id)) return true;
+      // 2. 파일 경로인 경우 (PostList 아이템)
+      if (id.includes("/") || id.includes("\\")) return true;
+      return false;
+    });
 
     if (targets.length === 0) {
       return { success: false, error: "선택된 유효한 소재가 없습니다." };
     }
 
-    // 각 소재를 JobQueue에 추가
-    targets.forEach((material) => {
+    // 각 소재(또는 파일)를 JobQueue에 추가
+    targets.forEach((id) => {
       jobQueue.addJob("PUBLISH_MATERIAL", {
-        materialId: material.id,
+        materialId: id,
+        homeTheme: homeTheme, // [NEW] 홈주제 저장
       });
     });
 
@@ -706,7 +794,7 @@ export class SchedulerService {
 
     return {
       success: true,
-      message: `${targets.length}개의 소재 발행 작업을 큐에 추가했습니다.`,
+      message: `${targets.length}개의 발행 작업을 큐에 추가했습니다.`,
     };
   }
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, memo } from "react";
 import { useNavigate } from "react-router-dom";
 import MaterialSelectionModal from "../components/MaterialSelectionModal";
-import { Zap, Activity, CheckCircle, Clock } from "lucide-react";
+import { Zap, Activity, CheckCircle, Clock, Home } from "lucide-react";
 
 // [MODIFIED] 통계 인터페이스 확장
 interface DailyStats {
@@ -229,13 +229,6 @@ const Dashboard: React.FC = () => {
     isRunning: false,
   });
   const [selectedInterval, setSelectedInterval] = useState(60);
-  const [countdown, setCountdown] = useState<string>("");
-  const [isCancelling, setIsCancelling] = useState(false);
-  const [dailyStats, setDailyStats] = useState<DailyStats>({
-    tistoryCount: 0,
-    naverCount: 0,
-    lastResetDate: "",
-  });
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [showMaterialModal, setShowMaterialModal] = useState(false);
   const [lastPublishResult, setLastPublishResult] = useState<{
@@ -246,39 +239,116 @@ const Dashboard: React.FC = () => {
     error?: string;
   } | null>(null);
 
+  // [NEW] 홈주제 관련 상태
+  const [homeThemes, setHomeThemes] = useState<string[]>([]);
+  const [isFetchingHomeTheme, setIsFetchingHomeTheme] = useState(false);
+  const [suggestedTheme, setSuggestedTheme] = useState<string | null>(null);
+
   const navigate = useNavigate();
 
-  useEffect(() => {
+  // 홈주제 목록 불러오기
+  const loadHomeThemes = async () => {
     if (window.electronAPI) {
-      const removeLogListener = window.electronAPI.onLogMessage(
-        (_event, message) => {
-          setLogs((prev) => {
-            const newLogs = [...prev, message];
-            if (newLogs.length > 200) {
-              return newLogs.slice(newLogs.length - 200);
-            }
-            return newLogs;
-          });
-        }
-      );
+      try {
+        const themes = await window.electronAPI.getHomeThemes();
+        setHomeThemes(themes);
+      } catch (e) {
+        console.error("홈주제 목록 로드 실패:", e);
+      }
+    }
+  };
 
-      const removeStageListener = window.electronAPI.onPublishStageChange?.(
-        (_event, data: PublishProgress) => {
-          setCurrentProgress(data);
-          if (["completed", "failed", "cancelled"].includes(data.stage)) {
-            setTimeout(() => {
-              setIsPublishing(false);
-              setCurrentProgress(null);
-              loadSchedulerStatus();
-            }, 2000);
+  // AI 기반 홈주제 추천 (현재는 사용하지 않음, IPC에서 가져옴음)
+  const fetchSuggestedHomeTheme = async () => {
+    if (window.electronAPI) {
+      setIsFetchingHomeTheme(true);
+      try {
+        const result = await window.electronAPI.getSuggestedHomeTheme({
+          title: "", // Dashboard에서는 발행 직전이라 제목이 불확실할 수 있음
+          content: "",
+        });
+
+        if (result.success) {
+          setSuggestedTheme(result.theme);
+        }
+      } catch (e) {
+        console.error("홈주제 추천 실패:", e);
+      } finally {
+        setIsFetchingHomeTheme(false);
+      }
+    }
+  };
+
+  // 발행 시 홈주제 선택 (현재는 사용하지 않음)
+  const handleSelectHomeThemeBeforePublish = async (theme: string) => {
+    if (window.electronAPI) {
+      try {
+        await window.electronAPI.selectHomeThemeBeforePublish({
+          title: "",
+          content: "",
+          selectedTheme: theme,
+        });
+      } catch (e) {
+        console.error("홈주제 선택 실패:", e);
+      }
+    }
+  };
+
+  useEffect(() => {
+    // 홈주제 목록 로드
+    loadHomeThemes();
+
+    if (window.electronAPI) {
+      // 로그 메시지 리스너 핸들러
+      const handleLogMessage = (_event: any, message: string) => {
+        setLogs((prev) => {
+          const newLogs = [...prev, message];
+          if (newLogs.length > 200) {
+            return newLogs.slice(newLogs.length - 200);
           }
+          return newLogs;
+        });
+      };
+
+      // 발행 단계 변경 리스너 핸들러
+      const handlePublishStageChange = (_event: any, data: PublishProgress) => {
+        console.log("[Dashboard] Publish stage change:", data);
+        setCurrentProgress(data);
+
+        if (["completed", "failed", "cancelled"].includes(data.stage)) {
+          setTimeout(() => {
+            setIsPublishing(false);
+            setCurrentProgress(null);
+            loadSchedulerStatus();
+          }, 2000);
         }
+      };
+
+      // 로그인 상태 변경 리스너 핸들러
+      const handleLoginStateChange = (
+        _event: any,
+        data: { state: string; message: string }
+      ) => {
+        if (data.state === "logged-in") {
+          // 로그인 성공 시 통계 다시 로드
+          loadSchedulerStatus();
+        }
+      };
+
+      // 이벤트 리스너 등록
+      const removeLogListener =
+        window.electronAPI.onLogMessage?.(handleLogMessage);
+      const removeStageListener = window.electronAPI.onPublishStageChange?.(
+        handlePublishStageChange
+      );
+      const removeLoginStateListener = window.electronAPI.onLoginStateChange?.(
+        handleLoginStateChange
       );
 
-      loadSchedulerStatus();
       return () => {
-        removeLogListener();
+        removeLogListener?.();
         removeStageListener?.();
+        removeLoginStateListener?.();
       };
     }
   }, []);
@@ -296,6 +366,12 @@ const Dashboard: React.FC = () => {
       }
     }
   };
+
+  const [dailyStats, setDailyStats] = useState<DailyStats>({
+    tistoryCount: 0,
+    naverCount: 0,
+    lastResetDate: "",
+  });
 
   const handleStartScheduler = async () => {
     if (window.electronAPI) {
@@ -315,16 +391,20 @@ const Dashboard: React.FC = () => {
     if (mode === "queue") setShowMaterialModal(true);
     else executePublish("random");
   };
-  const handleMaterialConfirm = async (items: any[]) => {
+  const handleMaterialConfirm = async (items: any[], homeTheme?: string) => {
     setShowMaterialModal(false);
     if (!items || items.length === 0) return;
 
     // 선택된 항목들의 ID 추출
     const selectedIds = items.map((item: any) => item.id || item.link);
-    await executePublish("queue", selectedIds);
+    await executePublish("queue", selectedIds, homeTheme);
   };
 
-  const executePublish = async (mode: "random" | "queue", ids?: string[]) => {
+  const executePublish = async (
+    mode: "random" | "queue",
+    ids?: string[],
+    homeTheme?: string
+  ) => {
     if (!window.electronAPI) return;
     if (isPublishing) return;
 
@@ -339,6 +419,7 @@ const Dashboard: React.FC = () => {
       const result = await window.electronAPI.oneClickPublish({
         mode,
         selectedIds: ids,
+        homeTheme,
       });
 
       if (result.success) {
@@ -430,6 +511,7 @@ const Dashboard: React.FC = () => {
               {isPublishing ? "발행 중..." : "🚀 원클릭 자동 발행"}
             </button>
           </div>
+
           {/* 스케줄러 설정 */}
           <div className="bg-gradient-to-br from-purple-50 to-pink-50 p-5 rounded-xl border border-purple-200 flex gap-2">
             <select
@@ -460,6 +542,35 @@ const Dashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* [NEW] 홈주제 선택 카드 (준비 단계) */}
+      {/* 이 카드는 나중에 발행 모달 내에서 활용될 수 있습니다 */}
+      <div className="bg-gradient-to-r from-cyan-50 to-teal-100 p-4 rounded-lg shadow-md border-l-4 border-cyan-200">
+        <div className="flex items-center gap-2">
+          <Home size={16} className="text-cyan-700" />
+          <div className="flex flex-col">
+            <h3 className="font-bold text-cyan-900">홈주제 선택</h3>
+            <p className="text-xs text-cyan-700">
+              티스토리 발행 시 자동으로 분석되어 선택됩니다
+            </p>
+          </div>
+        </div>
+        <div className="mt-2">
+          <div className="flex items-center gap-2 text-sm text-cyan-800">
+            <span className="font-medium">현재 추천 주제:</span>
+            {suggestedTheme ? (
+              <span className="font-bold bg-white px-2 py-1 rounded text-cyan-900">
+                {suggestedTheme}
+              </span>
+            ) : (
+              <span className="text-cyan-600 opacity-70">없음</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 text-xs text-cyan-700">
+            <span>총 홈주제: {homeThemes.length}개</span>
+          </div>
+        </div>
+      </div>
+
       {/* [OPTIMIZATION] 로그 모니터 (분리된 컴포넌트 사용) */}
       <LogMonitor logs={logs} onClear={() => setLogs([])} />
 
@@ -476,6 +587,7 @@ const Dashboard: React.FC = () => {
           isOpen={showMaterialModal}
           onClose={() => setShowMaterialModal(false)}
           onConfirm={handleMaterialConfirm}
+          defaultTab="posts" // [NEW] 소재 탭을 기본으로 열기
         />
       )}
     </div>

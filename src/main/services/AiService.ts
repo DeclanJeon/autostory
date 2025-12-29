@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import fs from "fs-extra";
 import store from "../config/store";
 import { logger, aiLogger } from "../utils/logger";
 import { v4 as uuidv4 } from "uuid";
@@ -798,30 +799,99 @@ ${chunk}
           {
             method: "POST",
             headers: {
-              Authorization: `Bearer ${settings.openrouterApiKey}`,
+              Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",
-              "HTTP-Referer": "https://autostory-ai-writer.local",
-              "X-Title": "AutoStory AI Writer",
             },
             body: JSON.stringify({
-              model: settings.aiModel || "xiaomi/mimo-v2-flash:free",
+              model:
+                settings.aiModel ||
+                "google/gemini-2.0-flash-lite-preview-02-05:free",
               messages: [{ role: "user", content: prompt }],
-              temperature: 0.3,
-              max_tokens: 50,
             }),
           }
         );
-
-        if (response.ok) {
-          const data = await response.json();
-          responseText = data.choices[0]?.message?.content || "";
-        }
+        const data = await response.json();
+        responseText = data.choices?.[0]?.message?.content || "";
       }
 
-      return responseText.trim() || "blogging";
-    } catch (e) {
-      return "blogging";
+      if (!responseText) return "tech, business";
+
+      // 정제 (특수문자 제거, 쉼표 기준 첫 번째 단어)
+      const keyword = responseText
+        .replace(/[^\w\s,]/g, "")
+        .split(",")[0]
+        .trim();
+
+      return keyword || "tech";
+    } catch (error) {
+      logger.warn(`키워드 추출 실패: ${error}`);
+      return "tech";
     }
+  }
+
+  /**
+   * [NEW] 이미지를 분석하여 AI 생성용 프롬프트를 만듭니다.
+   * (Gemini 1.5 Flash Vision 활용)
+   */
+  public async analyzeImageForPrompt(imagePath: string): Promise<string> {
+    const settings = await secureConfig.getFullSettings();
+    const apiKey = settings.aiApiKey;
+    if (!apiKey) throw new Error("AI API Key is missing for Vision task.");
+
+    try {
+      const genAI = new GoogleGenerativeAI(apiKey);
+      // Vision 지원 모델 사용
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+      const imageBuffer = await fs.readFile(imagePath);
+      const imageBase64 = imageBuffer.toString("base64");
+
+      const prompt = `
+      Describe this image in English specifically for an AI image generator (like Stable Diffusion or Midjourney).
+      Focus on the artistic style, subject, composition, lighting, and mood.
+      Output ONLY the prompt text, no explanations.
+      `;
+
+      const result = await model.generateContent([
+        prompt,
+        {
+          inlineData: {
+            data: imageBase64,
+            mimeType: "image/png",
+          },
+        },
+      ]);
+
+      const text = result.response.text();
+      return text.trim();
+    } catch (error: any) {
+      logger.error(`Image Analysis Failed: ${error.message}`);
+      return "A creative illustration suitable for a blog post.";
+    }
+  }
+
+  /**
+   * [NEW] 프롬프트를 사용하여 이미지 생성 (나노바나나 등)
+   * 현재는 실제 API가 없으므로 Placehold.co 로 대체합니다.
+   * 추후 실제 API 연동 시 fetch 부분을 수정하세요.
+   */
+  public async generateImageFromPrompt(prompt: string): Promise<string> {
+    logger.info(`Generating image for prompt: ${prompt.substring(0, 50)}...`);
+
+    // [TODO] 실제 나노바나나 API 연동 예시
+    /*
+    const response = await fetch("https://api.nanobanana.com/generate", {
+      method: "POST",
+      headers: { "Authorization": "Bearer YOUR_KEY" },
+      body: JSON.stringify({ prompt: prompt, model: "anime-v3" })
+    });
+    const data = await response.json();
+    return data.imageUrl;
+    */
+
+    // Mock 구현: 프롬프트 텍스트가 들어간 더미 이미지 URL 반환
+    const encodedText = encodeURIComponent(prompt.substring(0, 20) + "...");
+    return `https://placehold.co/1024x600/2d3436/ffffff/png?text=${encodedText}`;
   }
 
   /**
