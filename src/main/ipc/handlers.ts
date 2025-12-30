@@ -1,4 +1,5 @@
 import { ipcMain, dialog } from "electron";
+import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import fs from "fs-extra";
 import { AutomationService } from "../services/AutomationService";
@@ -13,7 +14,7 @@ import {
 import { secureConfig } from "../services/SecureConfigService";
 import { jobQueue } from "../services/JobQueueService";
 import { logger } from "../utils/logger";
-import store, { UsageManager } from "../config/store";
+import store, { UsageManager, LastBatchSelection } from "../config/store";
 import { ollamaInstaller, InstallProgress } from "../utils/ollamaInstaller";
 import { localAiService } from "../services/LocalAiService";
 import { ollamaConfig } from "../config/ollamaConfig";
@@ -144,6 +145,42 @@ export const registerHandlers = (mainWindow: any) => {
       } catch (error) {
         console.error(error);
         return [];
+      }
+    }
+  );
+
+  ipcMain.handle("get-post-images", async (_event, postPath: string) => {
+    return await fileManager.getPostImages(postPath);
+  });
+
+  ipcMain.handle(
+    "upload-post-image",
+    async (_event, { postPath, filePath }) => {
+      try {
+        await fileManager.savePostImage(postPath, filePath);
+
+        // Analyze Image for keywords
+        const imageName = path.basename(filePath);
+        const keywords = await aiService.analyzeImage(filePath);
+
+        // Save keywords to metadata
+        await fileManager.updateImageMetadata(postPath, imageName, keywords);
+
+        return { success: true };
+      } catch (error: any) {
+        return { success: false, error: error.message };
+      }
+    }
+  );
+
+  ipcMain.handle(
+    "delete-post-image",
+    async (_event, { postPath, imageName }) => {
+      try {
+        await fileManager.deletePostImage(postPath, imageName);
+        return { success: true };
+      } catch (error: any) {
+        return { success: false, error: error.message };
       }
     }
   );
@@ -773,11 +810,12 @@ export const registerHandlers = (mainWindow: any) => {
   });
 
   // 발행 취소 핸들러
+  // 발행 취소 핸들러
   ipcMain.handle("cancel-publish", () => {
     if (!schedulerInstance) {
       return { success: false, error: "스케줄러가 초기화되지 않았습니다." };
     }
-    return schedulerInstance.cancelCurrentPublish();
+    return { success: schedulerInstance.cancelCurrentJob() };
   });
 
   // 로그인 상태 변경 이벤트 리스너 등록
@@ -1501,6 +1539,44 @@ export const registerHandlers = (mainWindow: any) => {
     }
   );
 };
+
+// ============================================================
+// [NEW] 스마트 리트(Smart Retry)를 위한 핸들러
+// ============================================================
+
+/**
+ * 마지막 배치 선택 저장
+ */
+ipcMain.handle("save-last-batch-selection", async (_event, ids) => {
+  try {
+    const settings = store.get("settings");
+    const selection: LastBatchSelection = {
+      ids,
+      timestamp: Date.now(),
+    };
+
+    if (settings) {
+      settings.lastBatchSelection = selection;
+      store.set("settings", settings);
+      logger.info(`마지막 배치 저장됨 (${ids.length}개)`);
+    } else {
+      store.set("settings", { lastBatchSelection: selection });
+    }
+
+    return { success: true };
+  } catch (e: any) {
+    logger.error(`배치 저장 실패: ${e.message}`);
+    return { success: false, error: e.message };
+  }
+});
+
+/**
+ * 마지막 배치 선택 불러오기
+ */
+ipcMain.handle("get-last-batch-selection", async () => {
+  const settings = store.get("settings");
+  return settings?.lastBatchSelection || null;
+});
 
 // [신규] 앱 종료 시 스케줄러 리소스 정리 함수
 export const cleanupScheduler = () => {

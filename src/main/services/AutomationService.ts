@@ -1,4 +1,6 @@
 import { chromium, Browser, BrowserContext, Page } from "playwright";
+import type { FrameLocator, Locator } from "playwright";
+import { v4 as uuidv4 } from "uuid";
 import store from "../config/store";
 import { logger, sendLogToRenderer } from "../utils/logger";
 import { AiService } from "./AiService";
@@ -16,6 +18,7 @@ import { NaverService } from "./NaverService";
 import { YoutubeTranscript } from "youtube-transcript";
 import * as cheerio from "cheerio";
 import { HOME_TOPICS } from "../config/homeTopics";
+import { FileManager } from "./FileManager";
 
 export type LoginState = "logged-in" | "logged-out" | "logging-in" | "unknown";
 
@@ -47,6 +50,14 @@ export class AutomationService {
   private loginState: LoginState = "unknown";
   private loginAbortController: AbortController | null = null;
   private publishAbortController: AbortController | null = null;
+
+  /**
+   * @description 대표이미지 정책
+   */
+  private static readonly REPRESENT_IMAGE_POLICY:
+    | "soft"
+    | "hard"
+    | "retry-soft" = "retry-soft";
 
   /**
    * [신규] 마지막 로그인 검증 시간 캐시
@@ -100,6 +111,69 @@ export class AutomationService {
     return (
       this.loginAbortController !== null || this.publishAbortController !== null
     );
+  }
+
+  /**
+   * @description Toast 메시지를 Renderer로 전송
+   */
+  private sendToastToRenderer(payload: {
+    type: "success" | "error" | "warning" | "info";
+    title: string;
+    message?: string;
+  }): void {
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send("ui-toast", payload);
+    }
+  }
+
+  /**
+   * @description 에디터 iframe locator를 반환한다.
+   */
+  private getEditorFrame(page: Page): FrameLocator {
+    return page.frameLocator("#editor-tistory_ifr");
+  }
+
+  /**
+   * @description 대표이미지 버튼 locator를 iframe 내부/외부에서 모두 탐색한다.
+   */
+  private async locateRepresentButton(page: Page): Promise<{
+    scope: "frame" | "page";
+    locator: Locator;
+  } | null> {
+    const frame = this.getEditorFrame(page);
+
+    const inFrame = frame.locator(".mce-represent-image-btn");
+    if ((await inFrame.count()) > 0)
+      return { scope: "frame", locator: inFrame };
+
+    const inPage = page.locator(".mce-represent-image-btn");
+    if ((await inPage.count()) > 0) return { scope: "page", locator: inPage };
+
+    return null;
+  }
+
+  /**
+   * @description 에디터 내 첫 번째 이미지를 기다린다.
+   */
+  private async waitForFirstEditorImage(
+    page: Page,
+    timeoutMs = 20000
+  ): Promise<Locator> {
+    const frame = this.getEditorFrame(page);
+    const img = frame.locator("body#tinymce img").first();
+
+    await img.waitFor({ state: "visible", timeout: timeoutMs });
+    return img;
+  }
+
+  /**
+   * @description 본문 삽입 검증 게이트. 실패하면 다음 단계 진행을 막는다.
+   */
+  private async assertEditorHasContent(page: Page): Promise<void> {
+    const verified = await this.verifyEditorContent(page, 500);
+    if (!verified.success) {
+      throw new Error(`본문 삽입 검증 실패: ${verified.reason || "unknown"}`);
+    }
   }
 
   private async cleanupBrowser(): Promise<void> {
@@ -933,7 +1007,10 @@ export class AutomationService {
     }
   }
 
-  public async validateAndReplaceImages(htmlContent: string): Promise<string> {
+  public async validateAndReplaceImages(
+    htmlContent: string,
+    postPath?: string
+  ): Promise<string> {
     sendLogToRenderer(this.mainWindow, "이미지 유효성 검증 시작...");
 
     const imgRegex =
@@ -968,7 +1045,8 @@ export class AutomationService {
         const keyword = this.extractKeywordFromAlt(altText);
         const replacementUrl = await this.findReplacementImage(
           keyword,
-          usedUrls
+          usedUrls,
+          postPath
         );
 
         if (replacementUrl) {
@@ -1085,8 +1163,64 @@ export class AutomationService {
 
   private async findReplacementImage(
     keyword: string,
-    excludeUrls: Set<string>
+    excludeUrls: Set<string>,
+    postPath?: string
   ): Promise<string | null> {
+    // 0. [NEW] Check Local Post Images
+    if (postPath) {
+      try {
+        const fileManager = new FileManager();
+        const localImages = await fileManager.getPostImages(postPath);
+
+        if (localImages && localImages.length > 0) {
+          // Strategy: Find image with keyword in filename OR metadata
+          const lowerKeyword = keyword.toLowerCase();
+
+          // 1. Keyword match in metadata (Strongest)
+          const metaMatch = localImages.find(
+            (img) =>
+              !excludeUrls.has(`file://${img.path}`) &&
+              img.keywords &&
+              img.keywords.some(
+                (k: string) =>
+                  k.includes(lowerKeyword) || lowerKeyword.includes(k)
+              )
+          );
+
+          if (metaMatch) {
+            logger.info(`Found local image by metadata: ${metaMatch.name}`);
+            return `file://${metaMatch.path}`;
+          }
+
+          // 2. Keyword match in filename (Medium)
+          const nameMatch = localImages.find(
+            (img) =>
+              !excludeUrls.has(`file://${img.path}`) &&
+              img.name.toLowerCase().includes(lowerKeyword)
+          );
+
+          if (nameMatch) {
+            logger.info(`Found local image by filename: ${nameMatch.name}`);
+            return `file://${nameMatch.path}`;
+          }
+
+          // 3. Any available local image (Fallback for "Analyze image and place it")
+          // If we have local images but no match, maybe we should use one if it hasn't been used?
+          // The user said: "Use uploaded image preferentially".
+          // This implies we should try to use them up before going to Google.
+          const unusedLocal = localImages.find(
+            (img) => !excludeUrls.has(`file://${img.path}`)
+          );
+          if (unusedLocal) {
+            logger.info(`Using available local image: ${unusedLocal.name}`);
+            return `file://${unusedLocal.path}`;
+          }
+        }
+      } catch (e) {
+        logger.warn(`Local image search failed: ${e}`);
+      }
+    }
+
     const cachedImages = this.imageCache.get(keyword);
 
     if (cachedImages && cachedImages.length > 0) {
@@ -1132,7 +1266,8 @@ export class AutomationService {
 
   public async insertSectionImages(
     htmlContent: string,
-    usedImageUrls: Set<string>
+    usedImageUrls: Set<string>,
+    postPath?: string
   ): Promise<string> {
     sendLogToRenderer(this.mainWindow, "섹션별 이미지 삽입 분석 중...");
 
@@ -1162,10 +1297,11 @@ export class AutomationService {
           continue;
         }
 
-        const imageUrl = await this.fetchImageFromGoogle(
+        const imageUrl = await this.findReplacementImage(
           keyword,
-          usedImageUrls
-        );
+          usedImageUrls,
+          postPath
+        ); // [FIX] Use unified finder
 
         if (imageUrl) {
           usedImageUrls.add(imageUrl);
@@ -1361,7 +1497,8 @@ export class AutomationService {
   }
 
   public async processContentWithImageValidation(
-    htmlContent: string
+    htmlContent: string,
+    postPath?: string
   ): Promise<string> {
     sendLogToRenderer(this.mainWindow, "콘텐츠 이미지 처리 시작...");
 
@@ -1380,12 +1517,23 @@ export class AutomationService {
       htmlContent,
       usedImageUrls
     );
-    processedContent = await this.validateAndReplaceImages(processedContent);
+    processedContent = await this.validateAndReplaceImages(
+      processedContent,
+      postPath
+    );
+    // Section images logic doesn't strictly need postPath unless we want to use local images for sections too.
+    // For now, let's keep section images as Google search or use local if implemented.
+    // Let's pass postPath to insertSectionImages too if we want Section images to also use local pool.
+    // But findReplacementImage is the core.
     processedContent = await this.insertSectionImages(
       processedContent,
-      usedImageUrls
+      usedImageUrls,
+      postPath
     );
-    processedContent = await this.validateAndReplaceImages(processedContent);
+    processedContent = await this.validateAndReplaceImages(
+      processedContent,
+      postPath
+    );
 
     // [최종 안전장치] 남은 태그 잔여물 강제 제거
     // AI가 만든 태그([[IMAGE:...]] 또는 [[이미지:...]])가 처리되지 않고
@@ -1430,9 +1578,16 @@ export class AutomationService {
       sendLogToRenderer(this.mainWindow, `카테고리 확인 중: ${categoryName}`);
 
       // 1. 글쓰기 페이지에서 카테고리 목록 확인
-      await page.waitForSelector(TISTORY_SELECTORS.CATEGORY.BUTTON, {
-        timeout: 5000,
-      });
+      try {
+        await page.waitForSelector(TISTORY_SELECTORS.CATEGORY.BUTTON, {
+          timeout: 30000,
+        });
+      } catch (e) {
+        logger.error(
+          `카테고리 버튼 찾기 실패 (timeout). Current URL: ${page.url()}`
+        );
+        throw e;
+      }
       await page.click(TISTORY_SELECTORS.CATEGORY.BUTTON);
       await page.waitForTimeout(500);
 
@@ -1564,6 +1719,115 @@ export class AutomationService {
     }
   }
 
+  // ==========================================
+  // [NEW] Contextual Linking Helpers
+  // ==========================================
+
+  /**
+   * 간단한 키워드 추출기 (AI 호출 없이 빠르게 처리)
+   */
+  private extractKeywordsSimple(text: string): string[] {
+    const stopWords = new Set([
+      "이",
+      "그",
+      "저",
+      "것",
+      "수",
+      "등",
+      "를",
+      "을",
+      "에",
+      "가",
+      "이",
+      "은",
+      "는",
+      "로",
+      "으로",
+      "하고",
+      "해서",
+      "있는",
+      "없는",
+      "것을",
+      "대한",
+      "위해",
+      "the",
+      "a",
+      "an",
+      "is",
+      "of",
+      "to",
+      "in",
+      "and",
+      "for",
+      "with",
+    ]);
+
+    return text
+      .toLowerCase()
+      .replace(/[^\w\uac00-\ud7af\s]/g, "") // 특수문자 제거
+      .split(/\s+/)
+      .filter((w) => w.length >= 2 && !stopWords.has(w));
+  }
+
+  /**
+   * 자카드 유사도 계산
+   * J(A,B) = |A ∩ B| / |A ∪ B|
+   */
+  private calculateJaccardSimilarity(setA: string[], setB: string[]): number {
+    const a = new Set(setA);
+    const b = new Set(setB);
+
+    if (a.size === 0 && b.size === 0) return 0;
+
+    let intersection = 0;
+    for (const item of a) {
+      if (b.has(item)) intersection++;
+    }
+
+    const union = a.size + b.size - intersection;
+    return intersection / union;
+  }
+
+  /**
+   * 문맥 기반 연관 설정 찾기
+   */
+  private findMatchingContext(currentKeywords: string[]): {
+    category: string;
+    homeTheme: string;
+    similarity: number;
+    title: string;
+  } | null {
+    const history = store.get("publishedPostDetails") || [];
+    // 최근 50개만 분석 (성능 최적화)
+    const recentHistory = history.slice(0, 50);
+
+    let bestMatch: any = null;
+    let maxScore = 0;
+    const THRESHOLD = 0.3; // 30% 이상 일치
+
+    for (const post of recentHistory) {
+      const score = this.calculateJaccardSimilarity(
+        currentKeywords,
+        post.keywords
+      );
+      if (score > maxScore) {
+        maxScore = score;
+        bestMatch = post;
+      }
+    }
+
+    if (bestMatch && maxScore >= THRESHOLD) {
+      return {
+        category: bestMatch.category,
+        homeTheme: bestMatch.homeTheme,
+        similarity: maxScore,
+        title: bestMatch.title,
+      };
+    }
+
+    return null;
+  }
+
   public async writePostFromHtmlFile(
     filePath: string,
     title: string,
@@ -1602,13 +1866,50 @@ export class AutomationService {
         bodyContent = bodyMatch ? bodyMatch[1].trim() : originalHtml;
       }
 
+      // [NEW] 문맥 분석 및 카테고리/홈주제 자동 오버라이드
+      // 1. 키워드 추출
+      const currentKeywords = this.extractKeywordsSimple(
+        title + " " + bodyContent.substring(0, 1000)
+      );
+
+      // 2. 유사한 이전 글 찾기
+      const contextMatch = this.findMatchingContext(currentKeywords);
+
+      let finalCategory = categoryName;
+      let finalHomeTheme = homeTheme;
+
+      if (contextMatch) {
+        logger.info(
+          `🔄 [Context Link] 연관 글 감지: "${contextMatch.title}" (유사도: ${(
+            contextMatch.similarity * 100
+          ).toFixed(1)}%)`
+        );
+        sendLogToRenderer(
+          this.mainWindow,
+          `🔗 연관 주제 감지: "${contextMatch.title}"의 설정을 따릅니다.`
+        );
+
+        // 카테고리가 '없음'이거나 'General'일 때만, 또는 강제로 덮어쓰기 정책에 따라 결정
+        // 여기서는 항상 더 나은 문맥을 따른다고 가정
+        if (
+          contextMatch.category &&
+          contextMatch.category !== "카테고리 없음"
+        ) {
+          finalCategory = contextMatch.category;
+        }
+        if (contextMatch.homeTheme) {
+          finalHomeTheme = contextMatch.homeTheme;
+        }
+      }
+
       if (signal.aborted) {
         throw new Error("발행이 취소되었습니다.");
       }
 
       sendLogToRenderer(this.mainWindow, "이미지 유효성 검증 중...");
       const processedContent = await this.processContentWithImageValidation(
-        bodyContent
+        bodyContent,
+        filePath // [NEW] Pass post path for local image lookup
       );
 
       // [NEW] 로컬 이미지 경로를 Base64로 변환 (에디터 삽입용)
@@ -1617,7 +1918,6 @@ export class AutomationService {
         processedContent
       );
 
-      // [FIX] 파일 업데이트 (전체 HTML 구조 유지) - originalHtml 사용
       // [FIX] 파일 업데이트 (전체 HTML 구조 유지) - originalHtml 사용
       const updatedHtml = originalHtml.replace(
         /<body[^>]*>[\s\S]*?<\/body>/i,
@@ -1669,12 +1969,12 @@ export class AutomationService {
         throw new Error("발행이 취소되었습니다.");
       }
 
-      // [신규] 카테고리 존재 확인 및 생성
-      if (categoryName && categoryName !== "카테고리 없음") {
-        await this.ensureCategoryExists(categoryName, page);
+      // [신규] 카테고리 존재 확인 및 생성 (Override된 카테고리 사용)
+      if (finalCategory && finalCategory !== "카테고리 없음") {
+        await this.ensureCategoryExists(finalCategory, page);
       }
 
-      await this.selectCategory(page, categoryName);
+      await this.selectCategory(page, finalCategory);
 
       // [FIX] 제목 입력 전 강력한 정제 (3차 방어)
       // HTML 태그 제거, 마크다운 제거, 따옴표 제거
@@ -1689,21 +1989,28 @@ export class AutomationService {
         .trim();
 
       // 제목이 DOCTYPE으로 되어있다면 '제목 없음'으로 강제 변경
-      const finalTitle = /^<!DOCTYPE/i.test(cleanTitle)
+      const finalTitleText = /^<!DOCTYPE/i.test(cleanTitle)
         ? "제목 없음"
         : cleanTitle;
 
-      sendLogToRenderer(this.mainWindow, `제목 입력: ${finalTitle}`);
+      sendLogToRenderer(this.mainWindow, `제목 입력: ${finalTitleText}`);
 
-      const titleInput = await page.waitForSelector("#post-title-inp", {
-        timeout: 5000,
-      });
-      if (titleInput) {
-        await titleInput.click();
-        await page.keyboard.press(`${modifier}+a`);
-        await page.keyboard.press("Backspace");
-        await page.waitForTimeout(200);
-        await titleInput.fill(finalTitle); // [Modified] cleanTitle -> finalTitle
+      try {
+        const titleInput = await page.waitForSelector("#post-title-inp", {
+          timeout: 30000,
+        });
+        if (titleInput) {
+          await titleInput.click();
+          await page.keyboard.press(`${modifier}+a`);
+          await page.keyboard.press("Backspace");
+          await page.waitForTimeout(200);
+          await titleInput.fill(finalTitleText); // [Modified] cleanTitle -> finalTitleText
+        }
+      } catch (e) {
+        logger.error(
+          `제목 입력 필드 찾기 실패 (timeout). Current URL: ${page.url()}`
+        );
+        throw e;
       }
 
       await page.waitForTimeout(500);
@@ -1714,12 +2021,19 @@ export class AutomationService {
 
       // [핵심 변경] 클립보드 대신 직접 HTML 삽입
       sendLogToRenderer(this.mainWindow, "본문 콘텐츠 삽입 중...");
-      sendLogToRenderer(this.mainWindow, "본문 콘텐츠 삽입 중...");
       await this.insertContentToEditor(page, finalContent, modifier);
 
       sendLogToRenderer(this.mainWindow, "본문 삽입 완료.");
 
-      await page.waitForTimeout(1000);
+      if (signal.aborted) {
+        throw new Error("발행이 취소되었습니다.");
+      }
+
+      // (필수) 본문 삽입 완료 검증 게이트
+      await this.assertEditorHasContent(page);
+
+      // (정책 C) 대표이미지 2회 재시도 후 실패해도 발행 진행 + Toast/Log
+      await this.setRepresentativeImageWithPolicy(page, modifier);
 
       if (signal.aborted) {
         throw new Error("발행이 취소되었습니다.");
@@ -1736,25 +2050,22 @@ export class AutomationService {
       } catch (e) {
         logger.warn("에디터 콘텐츠 추출 실패, 원본 콘텐츠 사용");
         // HTML 태그 제거
-        // HTML 태그 제거
         editorTextContent = finalContent
           .replace(/<[^>]*>/g, " ")
           .replace(/\s+/g, " ")
           .substring(0, 2000);
       }
 
-      // [NEW] 대표 이미지 설정 (본문 첫 번째 이미지)
-      await this.setRepresentativeImage(page);
-
       // [FIX] 발행 순서 수정: 완료 버튼 클릭 -> (레이어 팝업) -> 홈주제 선택 -> 최종 발행
       await this.clickCompleteButton(page);
       await page.waitForTimeout(2000); // 레이어 애니메이션 대기
 
+      // [USE OVERRIDDEN THEME] 문맥 분석된 홈주제가 있으면 그것을 우선 사용
       await this.selectHomeTheme(
         page,
         cleanTitle,
         editorTextContent,
-        homeTheme
+        finalHomeTheme
       );
 
       // 예약 발행인 경우 예약 설정 처리
@@ -1763,6 +2074,25 @@ export class AutomationService {
         await this.clickReservationPublishButton(page);
       } else {
         await this.clickPublishButton(page);
+      }
+
+      // [NEW] 성공적으로 발행된 정보 저장 (문맥 학습용)
+      try {
+        const publishedDetails = store.get("publishedPostDetails") || [];
+        const newDetail = {
+          id: uuidv4(),
+          title: finalTitleText,
+          keywords: currentKeywords,
+          category: finalCategory,
+          homeTheme: finalHomeTheme || "주제 없음", // 추출된 게 없으면 기본값
+          publishedAt: Date.now(),
+        };
+        // 최신 100개 유지
+        const updatedDetails = [newDetail, ...publishedDetails].slice(0, 100);
+        store.set("publishedPostDetails", updatedDetails);
+        logger.info("✅ 발행 정보(문맥 데이터) 저장 완료");
+      } catch (e) {
+        logger.warn(`발행 정보 저장 실패(발행은 성공): ${e}`);
       }
 
       sendLogToRenderer(
@@ -3349,10 +3679,18 @@ ${themes.map((theme, index) => `${index + 1}. ${theme}`).join("\n")}
       );
 
       // Step 1: 카테고리 버튼 클릭하여 드롭다운 열기
-      const categoryBtn = await page.waitForSelector(
-        TISTORY_SELECTORS.CATEGORY.BUTTON,
-        { timeout: 5000 }
-      );
+      let categoryBtn;
+      try {
+        categoryBtn = await page.waitForSelector(
+          TISTORY_SELECTORS.CATEGORY.BUTTON,
+          { timeout: 30000 }
+        );
+      } catch (e) {
+        logger.warn(
+          `카테고리 선택 버튼 찾기 실패 (timeout). Current URL: ${page.url()}`
+        );
+        // return type is void, so we just log and return/throw or let it fall through check
+      }
 
       if (!categoryBtn) {
         logger.warn("카테고리 버튼을 찾을 수 없습니다.");
@@ -3912,114 +4250,144 @@ ${themes.map((theme, index) => `${index + 1}. ${theme}`).join("\n")}
   }
 
   /**
-   * [NEW] 대표 이미지 설정
-   *
-   * 본문 첫 번째 이미지를 잘라내서 다시 붙이고
-   * 티스토리 캐시 후 대표 이미지 체크박스를 클릭합니다.
-   *
-   * @param page - Playwright Page 객체
+   * @description 티스토리 대표이미지를 "이미지 Cut/Paste 캐싱 → represent 버튼 active"로 안정화한다.
+   * @param page Playwright Page
+   * @param modifier "Control" | "Meta"
    */
-  private async setRepresentativeImage(page: Page): Promise<void> {
-    try {
-      sendLogToRenderer(this.mainWindow, "대표 이미지 설정 중...");
+  private async setRepresentativeImageOnce(
+    page: Page,
+    modifier: string
+  ): Promise<void> {
+    sendLogToRenderer(
+      this.mainWindow,
+      "대표이미지 설정: 첫 이미지 캐싱(Cut/Paste) 시도..."
+    );
 
-      const frame = page.frameLocator("#editor-tistory_ifr");
-      const body = frame.locator("body#tinymce");
+    // 1) 첫 이미지 대기
+    const img = await this.waitForFirstEditorImage(page, 20000);
 
-      // 1. 첫 번째 이미지 찾기
-      const firstImage = body.locator("img:first-child");
+    // 2) 이미지 클릭(단독 선택 유도) — Ctrl+A 금지
+    await img.scrollIntoViewIfNeeded().catch(() => {});
+    await img.click({ timeout: 5000 });
+    await page.waitForTimeout(200);
 
-      const exists = (await firstImage.count()) > 0;
-      if (!exists) {
-        logger.warn("에디터에 이미지가 없습니다. 대표 이미지 설정 스킵.");
-        return;
-      }
+    // 3) Ctrl+X → Ctrl+V (서버 캐싱 트리거)
+    await page.keyboard.press(`${modifier}+x`);
+    await page.waitForTimeout(300);
+    await page.keyboard.press(`${modifier}+v`);
 
-      // 2. 이미지 HTML 가져오기
-      const imageHtml = await firstImage.evaluate(
-        (img: HTMLImageElement) => img.outerHTML
+    // 4) 렌더 안정화
+    await page.waitForTimeout(2000);
+
+    // 5) 다시 이미지 클릭하여 represent 버튼 노출
+    const imgAfter = this.getEditorFrame(page)
+      .locator("body#tinymce img")
+      .first();
+    await imgAfter.waitFor({ state: "visible", timeout: 10000 });
+    await imgAfter.click({ timeout: 5000 });
+    await page.waitForTimeout(400);
+
+    // 6) represent 버튼 찾기
+    const rep = await this.locateRepresentButton(page);
+    if (!rep) {
+      logger.warn(
+        "대표이미지 버튼(.mce-represent-image-btn)을 찾지 못했습니다. (UI 변경 가능)"
       );
-
-      logger.info(
-        `첫 번째 이미지 HTML 추출 완료: ${imageHtml.substring(0, 100)}...`
+      sendLogToRenderer(
+        this.mainWindow,
+        "대표이미지 버튼을 찾지 못했어요. 일단 발행은 진행합니다."
       );
-
-      // 3. 이미지 잘라내기 (Cut) 및 붙이기 (Paste)
-      await firstImage.click();
-      await page.waitForTimeout(200);
-
-      // 전체 선택
-      await page.keyboard.press(
-        `${process.platform === "darwin" ? "Meta" : "Control"}+a`
-      );
-      await page.waitForTimeout(100);
-
-      // 잘라내기
-      await page.keyboard.press(
-        `${process.platform === "darwin" ? "Meta" : "Control"}+x`
-      );
-      await page.waitForTimeout(200);
-
-      // 붙이기
-      await page.keyboard.press(
-        `${process.platform === "darwin" ? "Meta" : "Control"}+v`
-      );
-      await page.waitForTimeout(2000);
-
-      // 4. 티스토리 캐시 대기
-      // 이미지가 캐시되면 대표 이미지 체크박스가 활성화됨
-      logger.info("티스토리 이미지 캐시 대기 중...");
-      await page.waitForTimeout(3000);
-
-      // 5. 대표 이미지 체크박스 클릭
-      // .mce-represent-image-btn.active 또는 .mce-represent-image-btn 요소 찾기
-      // 먼저 활성화된 체크박스가 있는지 확인
-      try {
-        await page.waitForTimeout(1000);
-
-        const activeCheckbox = page.locator(".mce-represent-image-btn.active");
-        const activeExists = (await activeCheckbox.count()) > 0;
-
-        if (activeExists) {
-          sendLogToRenderer(
-            this.mainWindow,
-            "✅ 대표 이미지 체크박스가 이미 활성화되어 있습니다."
-          );
-          return;
-        }
-
-        // 체크박스 활성화되지 않은 경우, 이미지 다시 클릭
-        logger.info("대표 이미지 체크박스 찾기 위해 이미지 클릭 중...");
-
-        // 첫 번째 이미지 클릭
-        const clickedImage = body.locator("img:first-child");
-        const clickedExists = (await clickedImage.count()) > 0;
-        if (clickedExists) {
-          await clickedImage.click();
-          await page.waitForTimeout(500);
-        }
-
-        // 활성화된 체크박스 찾기
-        await page.waitForTimeout(1000);
-        const checkbox = page.locator(".mce-represent-image-btn.active");
-        const checkboxExists = (await checkbox.count()) > 0;
-
-        if (checkboxExists) {
-          await checkbox.click();
-          sendLogToRenderer(
-            this.mainWindow,
-            "✅ 대표 이미지 체크박스 클릭 완료"
-          );
-        } else {
-          logger.warn("대표 이미지 체크박스를 찾을 수 없습니다.");
-        }
-      } catch (e) {
-        logger.warn(`대표 이미지 체크박스 클릭 중 오류: ${e.message}`);
-      }
-    } catch (error: any) {
-      logger.warn(`대표 이미지 설정 중 오류: ${error.message}`);
-      sendLogToRenderer(this.mainWindow, "대표 이미지 설정 실패 (계속 진행)");
+      return; // 정책: soft-fail
     }
+
+    const frame = this.getEditorFrame(page);
+
+    // 이미 active면 끝
+    const activeCount =
+      rep.scope === "frame"
+        ? await this.getEditorFrame(page)
+            .locator(".mce-represent-image-btn.active")
+            .count()
+        : await page.locator(".mce-represent-image-btn.active").count();
+
+    if (activeCount > 0) {
+      sendLogToRenderer(
+        this.mainWindow,
+        "대표이미지가 이미 설정되어 있습니다."
+      );
+      return;
+    }
+
+    // 7) active가 아닌 버튼 클릭
+    const btnToClick =
+      rep.scope === "frame"
+        ? this.getEditorFrame(page)
+            .locator(".mce-represent-image-btn:not(.active)")
+            .first()
+        : page.locator(".mce-represent-image-btn:not(.active)").first();
+
+    if ((await btnToClick.count()) > 0) {
+      await btnToClick.click({ timeout: 3000 });
+    } else {
+      // fallback: 그냥 버튼 클릭
+      await rep.locator.first().click({ timeout: 3000 });
+    }
+
+    // 8) active 확인
+    const activeLocator =
+      rep.scope === "frame"
+        ? this.getEditorFrame(page).locator(".mce-represent-image-btn.active")
+        : page.locator(".mce-represent-image-btn.active");
+
+    await activeLocator.first().waitFor({ state: "visible", timeout: 5000 });
+
+    sendLogToRenderer(this.mainWindow, "대표이미지 설정 완료(active).");
+  }
+
+  /**
+   * @description 대표이미지 설정을 정책에 따라 실행한다.
+   * @param runner 실제 setRepresentativeImage() 실행 함수
+   */
+  private async setRepresentativeImageWithPolicy(
+    page: Page,
+    modifier: string
+  ): Promise<void> {
+    const maxAttempts =
+      AutomationService.REPRESENT_IMAGE_POLICY === "retry-soft" ? 2 : 1;
+    let lastError: unknown = null;
+
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        await this.setRepresentativeImageOnce(page, modifier);
+        return;
+      } catch (e) {
+        lastError = e;
+        if (i < maxAttempts - 1) {
+          // 짧은 대기 후 재시도
+          await new Promise((r) => setTimeout(r, 800));
+        }
+      }
+    }
+
+    // hard면 중단, 아니면 soft-fail
+    if (AutomationService.REPRESENT_IMAGE_POLICY === "hard") {
+      throw lastError instanceof Error
+        ? lastError
+        : new Error("대표이미지 설정 실패");
+    }
+
+    // retry-soft/soft: Toast+Log로 알리고 계속
+    this.sendToastToRenderer({
+      type: "warning",
+      title: "대표이미지 설정 실패",
+      message:
+        "대표이미지는 설정되지 않았지만 발행은 계속 진행합니다. (재시도 후 실패)",
+    });
+
+    sendLogToRenderer(
+      this.mainWindow,
+      "대표이미지 설정 실패(soft): 발행은 계속 진행합니다."
+    );
   }
 
   /**

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { DownloadCloud, AlertTriangle, Loader2 } from "lucide-react";
 
 interface DownloadProgress {
   total: number;
@@ -7,14 +8,6 @@ interface DownloadProgress {
   status: string;
 }
 
-/**
- * 브라우저 다운로드 모달 컴포넌트
- *
- * 최초 앱 실행 시 필요한 브라우저 엔진을 다운로드하는 과정을
- * 사용자에게 시각적으로 보여줍니다.
- *
- * @component BrowserDownloadModal
- */
 const BrowserDownloadModal: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
@@ -36,7 +29,6 @@ const BrowserDownloadModal: React.FC = () => {
 
     const removeComplete = window.electronAPI.onBrowserDownloadComplete?.(
       () => {
-        // 완료 후 1초 뒤에 닫기
         setTimeout(() => {
           setIsOpen(false);
           setProgress(null);
@@ -61,43 +53,62 @@ const BrowserDownloadModal: React.FC = () => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-[9999] backdrop-blur-sm">
-      <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full text-center border border-gray-200">
-        <h2 className="text-2xl font-bold mb-2 text-slate-800 flex items-center justify-center gap-2">
-          ⚙️ 초기 설정 진행 중
+    <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-[9999] backdrop-blur-md p-4">
+      <div className="bg-slate-900 p-8 rounded-2xl shadow-2xl max-w-md w-full text-center border border-slate-700 overflow-hidden relative">
+        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-emerald-500"></div>
+
+        <h2 className="text-xl font-bold mb-4 text-white flex items-center justify-center gap-3">
+          <DownloadCloud className="text-blue-500" size={24} />
+          System Initialization
         </h2>
 
         {error ? (
-          <div className="text-red-500 bg-red-50 p-4 rounded-lg mt-4">
-            <p className="font-bold">설치 중 오류가 발생했습니다.</p>
-            <p className="text-sm mt-2 break-keep">{error}</p>
+          <div className="bg-red-900/20 border border-red-800 p-4 rounded-xl mt-4 text-left">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="text-red-500 mt-1" size={20} />
+              <div>
+                <p className="font-bold text-red-400 text-sm">
+                  Installation Failed
+                </p>
+                <p className="text-xs text-red-300/80 mt-1 break-words leading-relaxed">
+                  {error}
+                </p>
+              </div>
+            </div>
             <button
               onClick={() => setIsOpen(false)}
-              className="mt-4 px-4 py-2 bg-white border border-red-200 rounded hover:bg-red-50 text-red-600 font-bold transition"
+              className="mt-4 w-full py-2 bg-slate-800 border border-slate-700 rounded-lg hover:bg-red-900/20 text-red-400 font-bold transition text-xs uppercase tracking-wider"
             >
-              닫기
+              Close
             </button>
           </div>
         ) : (
-          <>
-            <p className="text-gray-600 mb-6 text-sm">
-              자동화에 필요한 전용 브라우저 엔진을 다운로드하고 있습니다.
+          <div className="mt-2">
+            <p className="text-slate-400 mb-8 text-sm leading-relaxed">
+              Downloading browser engine for automation.
               <br />
-              최초 1회만 진행되며, 인터넷 환경에 따라 시간이 소요될 수 있습니다.
+              <span className="text-xs text-slate-500">
+                This happens only once. Please do not close the app.
+              </span>
             </p>
 
-            <div className="relative w-full bg-gray-200 rounded-full h-4 mb-2 overflow-hidden">
+            <div className="relative w-full bg-slate-800 rounded-full h-3 mb-3 overflow-hidden border border-slate-700">
               <div
-                className="bg-blue-600 h-4 rounded-full transition-all duration-300 ease-out"
+                className="bg-blue-600 h-full rounded-full transition-all duration-300 ease-out shadow-[0_0_10px_#2563eb]"
                 style={{ width: `${progress?.percent || 0}%` }}
               ></div>
             </div>
 
-            <div className="flex justify-between text-xs text-gray-500 font-mono mt-2">
-              <span>{progress?.status || "준비 중..."}</span>
-              <span className="font-bold">{progress?.percent || 0}%</span>
+            <div className="flex justify-between items-center text-xs text-slate-500 font-mono">
+              <span className="flex items-center gap-2">
+                <Loader2 size={10} className="animate-spin text-blue-500" />
+                {progress?.status || "Preparing..."}
+              </span>
+              <span className="font-bold text-white">
+                {progress?.percent || 0}%
+              </span>
             </div>
-          </>
+          </div>
         )}
       </div>
     </div>

@@ -104,6 +104,128 @@ export class FileManager {
     this.tessDataDir = app.getPath("userData");
   }
 
+  // ============================================================
+  // [NEW] Post Image Management
+  // ============================================================
+
+  private getPostImagesDir(postPath: string): string {
+    const ext = path.extname(postPath);
+    const baseName = path.basename(postPath, ext);
+    const dirName = path.dirname(postPath);
+    return path.join(dirName, `${baseName}_images`);
+  }
+
+  public async getPostImages(postPath: string): Promise<any[]> {
+    try {
+      const imagesDir = this.getPostImagesDir(postPath);
+      if (!(await fs.pathExists(imagesDir))) {
+        return [];
+      }
+
+      const files = await fs.readdir(imagesDir);
+      const imageFiles = files.filter((f) =>
+        /\.(jpg|jpeg|png|gif|webp)$/i.test(f)
+      );
+
+      // Load metadata if exists
+      const metadataPath = path.join(imagesDir, "metadata.json");
+      let metadata: any = {};
+      if (await fs.pathExists(metadataPath)) {
+        try {
+          metadata = await fs.readJson(metadataPath);
+        } catch (e) {
+          logger.warn(`Failed to read metadata for ${postPath}: ${e}`);
+        }
+      }
+
+      return imageFiles.map((file) => ({
+        name: file,
+        path: path.join(imagesDir, file),
+        keywords: metadata[file] || [], // Loaded keywords
+      }));
+    } catch (error) {
+      logger.error(`Failed to get post images: ${error}`);
+      return [];
+    }
+  }
+
+  public async savePostImage(
+    postPath: string,
+    sourcePath: string
+  ): Promise<void> {
+    try {
+      const imagesDir = this.getPostImagesDir(postPath);
+      await fs.ensureDir(imagesDir);
+
+      const fileName = path.basename(sourcePath);
+      const destPath = path.join(imagesDir, fileName);
+
+      await fs.copy(sourcePath, destPath);
+
+      // Analyze image
+      // Note: We need AiService instance. Since we can't easily inject it here due to circular deps potential
+      // or structure, we might need to assume it's passed or available.
+      // However, usually Service uses Manager. Manager using Service is circular.
+      // Let's rely on the caller (Handler) to call AiService.analyze matching logic?
+      // Or, we can dynamically import AiService?
+
+      // Ideally, the Handler calls `FileManager.savePostImage` then `AiService.analyzeImage` then `FileManager.updateImageMetadata`.
+      // But let's keep it simple. If we want drag & drop to "Just Work", the handler should coordinate.
+      // So here we simply copy.
+    } catch (error) {
+      logger.error(`Failed to save post image: ${error}`);
+      throw error;
+    }
+  }
+
+  public async updateImageMetadata(
+    postPath: string,
+    imageName: string,
+    keywords: string[]
+  ): Promise<void> {
+    try {
+      const imagesDir = this.getPostImagesDir(postPath);
+      const metadataPath = path.join(imagesDir, "metadata.json");
+
+      let metadata: any = {};
+      if (await fs.pathExists(metadataPath)) {
+        metadata = await fs.readJson(metadataPath);
+      }
+
+      metadata[imageName] = keywords;
+      await fs.writeJson(metadataPath, metadata, { spaces: 2 });
+    } catch (error) {
+      logger.error(`Failed to update metadata: ${error}`);
+    }
+  }
+
+  public async deletePostImage(
+    postPath: string,
+    imageName: string
+  ): Promise<void> {
+    try {
+      const imagesDir = this.getPostImagesDir(postPath);
+      const imagePath = path.join(imagesDir, imageName);
+
+      if (await fs.pathExists(imagePath)) {
+        await fs.unlink(imagePath);
+      }
+
+      // Update metadata
+      const metadataPath = path.join(imagesDir, "metadata.json");
+      if (await fs.pathExists(metadataPath)) {
+        const metadata = await fs.readJson(metadataPath);
+        if (metadata[imageName]) {
+          delete metadata[imageName];
+          await fs.writeJson(metadataPath, metadata, { spaces: 2 });
+        }
+      }
+    } catch (error) {
+      logger.error(`Failed to delete post image: ${error}`);
+      throw error;
+    }
+  }
+
   /**
    * [NEW] PDF 파일에서 이미지를 추출하여 저장합니다.
    * @param filePath PDF 파일 경로

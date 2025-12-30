@@ -20,6 +20,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("list-models", apiKey, provider, showAll),
   listPosts: () => ipcRenderer.invoke("list-posts"),
   readPost: (filePath: string) => ipcRenderer.invoke("read-post", filePath),
+  deletePost: (filePath: string) => ipcRenderer.invoke("delete-post", filePath),
+
+  // [NEW] Post Image Management
+  getPostImages: (postPath: string) =>
+    ipcRenderer.invoke("get-post-images", postPath),
+  uploadPostImage: (postPath: string, filePath: string) =>
+    ipcRenderer.invoke("upload-post-image", { postPath, filePath }),
+  deletePostImage: (postPath: string, imageName: string) =>
+    ipcRenderer.invoke("delete-post-image", { postPath, imageName }),
 
   // ============================================================
   // 템플릿 관련 (확장)
@@ -188,6 +197,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("publish-stage-change", subscription);
     return () =>
       ipcRenderer.removeListener("publish-stage-change", subscription);
+  },
+
+  /**
+   * UI Toast 메시지 수신 리스너
+   */
+  onToast: (
+    callback: (
+      event: any,
+      data: {
+        type: "success" | "error" | "warning" | "info";
+        title: string;
+        message?: string;
+      }
+    ) => void
+  ) => {
+    const subscription = (_event: any, data: any) => callback(_event, data);
+    ipcRenderer.on("ui-toast", subscription);
+    return () => ipcRenderer.removeListener("ui-toast", subscription);
   },
 
   onLoginStateChange: (callback: (event: any, data: any) => void) => {

@@ -2934,4 +2934,59 @@ ${content.substring(0, 1000)}
       return "기타·잡담";
     }
   }
+  /**
+   * [신규] 이미지 분석 및 키워드 추출 (Vision API)
+   * @param imagePath 이미지 파일 경로
+   * @returns 이미지 설명 키워드 배열
+   */
+  public async analyzeImage(imagePath: string): Promise<string[]> {
+    const settings = await secureConfig.getFullSettings();
+
+    // 로컬 AI 우선 사용 (비전 기능이 있을 경우) - 현재는 Gemini만 지원 가정
+    // if (settings.aiProvider === "local") ...
+
+    if (!settings.aiApiKey && !settings.openrouterApiKey) {
+      logger.warn("Image Analysis: No API Key found.");
+      return [];
+    }
+
+    try {
+      const imageBuffer = await fs.readFile(imagePath);
+      const base64Image = imageBuffer.toString("base64");
+      const mimeType = imagePath.endsWith(".png") ? "image/png" : "image/jpeg";
+
+      const prompt = `
+      Look at this image and generate 5-10 relevant English keywords that describe the visual content.
+      Focus on objects, setting, and mood.
+      Output ONLY the keywords separated by commas.
+      Example: apple, fruit, red, healthy, food
+      `;
+
+      if (settings.aiProvider === "gemini") {
+        const genAI = new GoogleGenerativeAI(settings.aiApiKey!);
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Vision supported
+
+        const result = await model.generateContent([
+          prompt,
+          {
+            inlineData: {
+              data: base64Image,
+              mimeType: mimeType,
+            },
+          },
+        ]);
+
+        const text = result.response.text();
+        return text
+          .split(",")
+          .map((k) => k.trim().toLowerCase())
+          .filter((k) => k.length > 0);
+      }
+
+      return [];
+    } catch (error) {
+      logger.error(`Image analysis failed: ${error}`);
+      return [];
+    }
+  }
 }

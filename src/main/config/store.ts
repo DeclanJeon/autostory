@@ -12,6 +12,26 @@ export interface DailyUsageStats {
 }
 
 /**
+ * 마지막 배치 선택 정보 타입
+ */
+export interface LastBatchSelection {
+  ids: string[];
+  timestamp: number;
+}
+
+/**
+ * [NEW] 게시글 상세 이력 (문맥 연결용)
+ */
+export interface PublishedPostDetail {
+  id: string; // URL or UUID
+  title: string;
+  keywords: string[]; // AI가 추출한 핵심 키워드
+  category: string;
+  homeTheme: string;
+  publishedAt: number;
+}
+
+/**
  * 소재 아이템 타입 정의
  */
 export interface MaterialItem {
@@ -83,6 +103,8 @@ interface UserSchema {
     naverEnabled: boolean;
     // [NEW] 티스토리 설정
     tistoryEnabled: boolean;
+    // [NEW] 마지막 배치 선택
+    lastBatchSelection?: LastBatchSelection;
   };
 
   // [MODIFIED] 일일 사용량 (구조 변경됨)
@@ -103,6 +125,8 @@ interface UserSchema {
   publishedPosts: string[];
   // [신규] 중복 방지를 위한 링크 이력 (RSS URL 등)
   publishedHistory: string[];
+  // [NEW] 문맥 기반 연결을 위한 상세 이력
+  publishedPostDetails: PublishedPostDetail[];
   // [신규] 소재 보관함
   materials: MaterialItem[];
   scheduler: {
@@ -1380,6 +1404,8 @@ const store = new Store<UserSchema>({
     publishedPosts: [],
     // [신규] 초기값 추가
     publishedHistory: [],
+    // [NEW] 문맥 기반 연결을 위한 상세 이력 초기값
+    publishedPostDetails: [],
     materials: [],
     scheduler: {
       enabled: false,

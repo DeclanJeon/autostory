@@ -44,6 +44,7 @@ export interface SchedulerStatus {
 
 export class SchedulerService {
   private intervalId: NodeJS.Timeout | null = null;
+  private idleResetTimer: NodeJS.Timeout | null = null;
   private mainWindow: any;
   private isProcessing: boolean = false;
   private currentStage: PublishStage = "idle";
@@ -101,8 +102,33 @@ export class SchedulerService {
       "selecting-style",
       "generating-content",
       "processing-images",
+      "publishing", // [Modified] publishing 단계도 취소 가능하도록 추가
     ];
     return cancellableStages.includes(stage);
+  }
+
+  /**
+   * [NEW] 현재 진행 중인 작업 취소
+   */
+  public cancelCurrentJob(): boolean {
+    if (!this.isProcessing) return false;
+
+    this.isCancelled = true;
+    logger.info("🚫 작업 취소 요청 수신");
+    this.updateStage("cancelled", "사용자 요청에 의해 작업을 취소하는 중...");
+
+    // AutomationService 작업 취소 (Playwright 작업 중단)
+    const automationCancelled = this.automation.cancelCurrentOperation();
+    if (automationCancelled) {
+      logger.info("AutomationService 중단 신호 전송됨");
+    }
+
+    // 현재 Job 취소 처리
+    if (this.currentJobId) {
+      jobQueue.updateJobStatus(this.currentJobId, "CANCELLED", "사용자 취소");
+    }
+
+    return true;
   }
 
   public getStatus(): SchedulerStatus {
@@ -186,12 +212,45 @@ export class SchedulerService {
   }
 
   /**
+   * @description 큐 처리 종료 후 UI가 완료 상태를 인지할 수 있도록
+   *              completed 상태를 유지했다가 idle로 복귀시킨다.
+   * @param delayMs completed 유지 시간(ms)
+   */
+  private scheduleIdleReset(delayMs: number = 2500): void {
+    if (this.idleResetTimer) {
+      clearTimeout(this.idleResetTimer);
+      this.idleResetTimer = null;
+    }
+
+    this.idleResetTimer = setTimeout(() => {
+      // 아직 처리중이면 건드리지 않음
+      if (this.isProcessing) return;
+
+      // 큐가 비었을 때만 idle로
+      if (
+        jobQueue.getPendingCount() === 0 &&
+        jobQueue.getProcessingCount() === 0
+      ) {
+        this.updateStage(
+          "idle",
+          "대기 상태입니다. 다음 발행을 진행할 수 있어요."
+        );
+      }
+    }, delayMs);
+  }
+
+  /**
    * 스케줄러 중지
    */
   public stopSchedule(): boolean {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
+    }
+
+    if (this.idleResetTimer) {
+      clearTimeout(this.idleResetTimer);
+      this.idleResetTimer = null;
     }
 
     if (this.powerBlockerId !== null) {
@@ -213,71 +272,91 @@ export class SchedulerService {
   }
 
   /**
-   * 작업 큐 프로세서
+   * @description Job Queue 처리 루프(while)로 변경:
+   *              - 재귀 제거
+   *              - 큐 종료 시 completed 이벤트 발행
    */
-  private async processQueue() {
+  private async processQueue(): Promise<void> {
     if (this.isProcessing) {
       logger.warn("Job processor is already running. Skipping this cycle.");
       return;
     }
 
     this.isProcessing = true;
+    this.isCancelled = false;
 
     try {
-      const job = jobQueue.getNextJob();
+      while (true) {
+        const job = jobQueue.getNextJob();
 
-      if (!job) {
-        logger.info("No pending jobs in queue.");
-        this.updateStage("idle", "모든 대기열 작업이 완료되었습니다.");
-        return;
+        if (!job) {
+          // 큐 소진 = 전체 완료 이벤트
+          this.updateStage(
+            "completed",
+            "선택한 모든 발행 작업이 완료되었습니다. 자동으로 스케줄러가 종료됩니다."
+          );
+          logger.info(
+            "[Scheduler] Queue is empty. All selected jobs finished."
+          );
+          this.scheduleIdleReset(2500);
+          return;
+        }
+
+        logger.info(`Starting Job: ${job.id} (${job.type})`);
+        jobQueue.updateJobStatus(job.id, "PROCESSING");
+        this.currentJobId = job.id;
+
+        // 큐 작업 시작
+        this.updateStage("checking-auth", `큐 작업 시작: ${job.type}`);
+
+        sendLogToRenderer(
+          this.mainWindow,
+          `🔨 작업 시작: ${job.type} - ${JSON.stringify(job.data).substring(
+            0,
+            50
+          )}...`
+        );
+
+        // 실제 작업 실행
+        await this.executeJob(job);
+
+        jobQueue.updateJobStatus(job.id, "COMPLETED");
+
+        // scheduler 통계 업데이트
+        const schedulerConfig = store.get("scheduler");
+        store.set("scheduler", {
+          ...schedulerConfig,
+          lastRun: Date.now(),
+          totalPublished: (schedulerConfig.totalPublished || 0) + 1,
+        });
+
+        sendLogToRenderer(this.mainWindow, `큐 작업 완료: ${job.id}`);
+        this.currentJobId = null;
+
+        // 다음 job 계속
       }
-
-      logger.info(`🚀 Starting Job: ${job.id} (${job.type})`);
-      jobQueue.updateJobStatus(job.id, "PROCESSING");
-      this.currentJobId = job.id;
-
-      // 발행 진행 상태 업데이트
-      this.updateStage("checking-auth", `작업 시작: ${job.type}`);
-
-      sendLogToRenderer(
-        this.mainWindow,
-        `🔨 작업 시작: ${job.type} - ${JSON.stringify(job.data).substring(
-          0,
-          50
-        )}...`
-      );
-
-      // 실제 작업 실행
-      await this.executeJob(job);
-
-      jobQueue.updateJobStatus(job.id, "COMPLETED");
-
-      // 스케줄러 통계 업데이트
-      const schedulerConfig = store.get("scheduler");
-      store.set("scheduler", {
-        ...schedulerConfig,
-        lastRun: Date.now(),
-        totalPublished: (schedulerConfig.totalPublished || 0) + 1,
-      });
-
-      sendLogToRenderer(this.mainWindow, `✅ 작업 완료: ${job.id}`);
     } catch (error: any) {
-      logger.error(`❌ Job Execution Failed: ${error.message}`);
+      logger.error(`Job Execution Failed: ${error.message}`);
 
-      // 현재 작업 실패 처리
       if (this.currentJobId) {
         jobQueue.updateJobStatus(this.currentJobId, "FAILED", error.message);
+      }
+
+      // 실패도 UI가 풀리도록 stage 발행 (취소가 아닐 때만 FAILED 처리)
+      if (!this.isCancelled) {
+        this.updateStage("failed", `큐 작업 실패: ${error.message}`);
+      } else {
+        this.updateStage("cancelled", "작업이 취소되었습니다.");
+      }
+      this.scheduleIdleReset(2500);
+
+      // 취소된 경우 에러를 다시 던지지 않음 (조용한 종료)
+      if (!this.isCancelled) {
+        throw error;
       }
     } finally {
       this.isProcessing = false;
       this.currentJobId = null;
-
-      // 큐에 남은 작업이 더 있다면 즉시 재귀 호출
-      const nextJob = jobQueue.getNextJob();
-      if (nextJob) {
-        logger.info("Processing next job in queue...");
-        await this.processQueue();
-      }
     }
   }
 
@@ -724,6 +803,9 @@ export class SchedulerService {
       return { success: false, error: "이미 작업이 진행 중입니다." };
     }
 
+    // [FIX] 수동 선택 발행 시 기존 스케줄러(자동 반복) 중지
+    this.stopSchedule();
+
     if (rssLinks.length === 0) {
       return { success: false, error: "선택된 RSS 항목이 없습니다." };
     }
@@ -764,6 +846,9 @@ export class SchedulerService {
     if (this.isProcessing) {
       return { success: false, error: "이미 작업이 진행 중입니다." };
     }
+
+    // [FIX] 수동 선택 발행 시 기존 스케줄러(자동 반복) 중지
+    this.stopSchedule();
 
     const materials = store.get("materials") || [];
     const validMaterialIds = new Set(materials.map((m) => m.id));
@@ -821,7 +906,8 @@ export class SchedulerService {
       jobQueue.updateJobStatus(this.currentJobId, "FAILED", "사용자 취소");
     }
 
-    this.updateStage("cancelled", "발행이 취소되었습니다.");
+    this.updateStage("cancelled", "사용자 요청으로 발행을 취소했습니다.");
+    this.scheduleIdleReset(1500);
 
     return { success: true, message: "발행 취소 요청이 처리되었습니다." };
   }

@@ -14,6 +14,14 @@ export interface MaterialItem {
   status: "pending" | "processed" | "failed";
 }
 
+/**
+ * [NEW] 스마트 재시도(Smart Retry)를 위한 마지막 배치 선택 정보
+ */
+export interface LastBatchSelection {
+  ids: string[];
+  timestamp: number;
+}
+
 export type TemplateType = "layout" | "prompt" | "persona";
 
 export type TemplateCategory =
@@ -90,6 +98,8 @@ export interface Settings {
   naverEnabled: boolean;
   // [NEW] 티스토리 블로그 설정
   tistoryEnabled: boolean;
+  // [NEW] 스마트 재시도(Smart Retry)를 위한 마지막 배치 선택 정보
+  lastBatchSelection?: LastBatchSelection;
 }
 
 export interface PromptHistory {
@@ -570,6 +580,20 @@ declare global {
       ) => () => void;
       onLoginStateChange: (
         callback: (event: any, data: { state: string; message: string }) => void
+      ) => () => void;
+
+      /**
+       * UI Toast 메시지 수신 리스너
+       */
+      onToast: (
+        callback: (
+          event: any,
+          data: {
+            type: "success" | "error" | "warning" | "info";
+            title: string;
+            message?: string;
+          }
+        ) => void
       ) => () => void;
 
       // ============================================================

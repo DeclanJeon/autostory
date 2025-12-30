@@ -6,7 +6,17 @@ import {
   Trash2,
   RefreshCw,
   UploadCloud,
-  HomeIcon,
+  FileText,
+  Search,
+  CheckCircle2,
+  X,
+  Link as LinkIcon,
+  Eye,
+  Edit3,
+  Calendar,
+  Layers,
+  Sparkles,
+  Image as ImageIcon,
 } from "lucide-react";
 import FileUploadModal from "../components/FileUploadModal";
 import LinkInputModal from "../components/LinkInputModal";
@@ -31,29 +41,39 @@ const PostList: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState(""); // [OPTIMIZATION] 검색 필터 추가
+  const [searchTerm, setSearchTerm] = useState("");
   const { showSuccess, showError, showInfo } = useToastHelpers();
-
-  // [NEW] 홈주제 관련 상태
   const [homeThemes, setHomeThemes] = useState<string[]>([]);
-  const [isFetchingHomeTheme, setIsFetchingHomeTheme] = useState(false);
-  const [suggestedTheme, setSuggestedTheme] = useState<string | null>(null);
+  const [postImages, setPostImages] = useState<any[]>([]);
+
+  const loadPostImages = async (postPath: string) => {
+    if ((window.electronAPI as any)?.getPostImages) {
+      try {
+        const images = await (window.electronAPI as any).getPostImages(
+          postPath
+        );
+        setPostImages(images || []);
+      } catch (e) {
+        console.error("Failed to load images", e);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (selectedPost) {
+      loadPostImages(selectedPost.path);
+    } else {
+      setPostImages([]);
+    }
+  }, [selectedPost]);
 
   useEffect(() => {
     loadPosts();
-
-    // [NEW] 홈주제 목록 로드
     if (window.electronAPI) {
       window.electronAPI
         .getHomeThemes?.()
-        .then((themes) => {
-          if (themes) {
-            setHomeThemes(themes);
-          }
-        })
-        .catch((err) => {
-          console.error("홈주제 목록 로드 실패:", err);
-        });
+        .then((themes) => themes && setHomeThemes(themes))
+        .catch((err) => console.error("홈주제 목록 로드 실패:", err));
     }
   }, []);
 
@@ -87,42 +107,11 @@ const PostList: React.FC = () => {
     }
   };
 
-  // [NEW] 홈주제 추천 함수 (현재는 Dashboard에서 발행 직전에만 사용)
-  const fetchSuggestedHomeTheme = async (title: string, content: string) => {
-    if (!title || !content) {
-      setSuggestedTheme(null);
-      return;
-    }
-
-    setIsFetchingHomeTheme(true);
-    try {
-      const result = await window.electronAPI.getSuggestedHomeTheme({
-        title,
-        content,
-      });
-
-      if (result.success && result.theme) {
-        setSuggestedTheme(result.theme);
-        showInfo("AI 추천 홈주제", `홈주제 "${result.theme}"을 추천했습니다.`);
-      } else {
-        setSuggestedTheme(null);
-      }
-    } catch (error) {
-      console.error("홈주제 추천 실패:", error);
-      setSuggestedTheme(null);
-    } finally {
-      setIsFetchingHomeTheme(false);
-    }
-  };
-
   const filteredPosts = useMemo(() => {
     return posts.filter((post) => {
-      // 1. 탭 필터
       const tabMatch =
         activeTab === "published" ? post.isPublished : !post.isPublished;
       if (!tabMatch) return false;
-
-      // 2. 검색어 필터
       if (searchTerm) {
         const term = searchTerm.toLowerCase();
         return (
@@ -150,231 +139,325 @@ const PostList: React.FC = () => {
   };
 
   return (
-    <div className="p-6 bg-gray-50 h-full flex flex-col">
-      <h1 className="text-3xl font-bold mb-6">게시글 관리</h1>
-
-      {/* 상태 카드 그리드 */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-        {/* [NEW] 홈주제 추천 카드 */}
-        <div className="bg-gradient-to-r from-blue-50 to-cyan-50 p-4 rounded-lg shadow-md border-l-4 border-cyan-200 relative">
-          <div className="flex items-center gap-2">
-            <HomeIcon size={20} className="text-cyan-700" />
-            <div className="flex flex-col">
-              <h3 className="font-bold text-cyan-900">AI 추천 홈주제</h3>
-              <p className="text-xs text-cyan-700">
-                티스토리 발행 시 자동으로 분석되어 선택됩니다
-              </p>
-            </div>
-          </div>
-
-          {/* [NEW] 홈주제 선택 영역 */}
-          <div className="mt-2">
-            <p className="text-sm text-gray-600 mb-2">현재 추천 주제:</p>
-            {isFetchingHomeTheme && (
-              <div className="text-xs text-gray-500 animate-pulse">
-                AI 분석 중...
-              </div>
-            )}
-            {!isFetchingHomeTheme && suggestedTheme ? (
-              <div className="flex items-center gap-2 mt-1">
-                <span className="px-3 py-1 bg-cyan-100 text-cyan-900 rounded-full font-bold text-sm animate-pulse">
-                  {suggestedTheme}
-                </span>
-              </div>
-            ) : (
-              <div className="text-sm text-gray-500 mt-1">
-                게시글을 선택하면 자동으로 추천됩니다
-              </div>
-            )}
-          </div>
+    <div className="flex flex-col h-full bg-slate-900 text-slate-100 p-8 gap-6 overflow-hidden">
+      {/* Header */}
+      <div className="flex justify-between items-center flex-shrink-0">
+        <div>
+          <h1 className="text-3xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-400 flex items-center gap-3">
+            <FileText size={28} className="text-purple-500" />
+            Post Manager
+          </h1>
+          <p className="text-slate-400 text-sm mt-1">
+            생성된 문서를 관리하고, 발행 상태를 확인하세요.
+          </p>
         </div>
 
-        {/* 사용량 카드 (공통 UI) */}
-        <div className="bg-white p-4 rounded-lg shadow-md border-l-4 border-gray-200">
-          <div className="flex items-center gap-2 mb-2">
-            <RefreshCw size={16} className="text-blue-500" />
-            <h3 className="text-gray-600 font-bold">전체 포스트</h3>
-          </div>
-          <div className="grid grid-cols-2 gap-4 text-center">
-            <div>
-              <p className="text-2xl font-bold text-gray-800">{posts.length}</p>
-              <p className="text-xs text-gray-500">Total Posts</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-blue-600">
-                {posts.filter((p) => p.isPublished).length}
-              </p>
-              <p className="text-xs text-gray-500">발행 완료</p>
-            </div>
-          </div>
-        </div>
-
-        {/* 작업 버튼 */}
-        <div className="bg-white p-4 rounded-lg shadow-md border-l-4 border-gray-200">
-          <h3 className="text-gray-600 font-bold mb-3">빠른 실행</h3>
-          <div className="grid grid-cols-2 gap-4">
-            <button
-              onClick={() => setIsLinkModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded transition"
-            >
-              <Trash2 size={18} /> 링크 분석
-            </button>
-            <button
-              onClick={() => setIsUploadModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition"
-            >
-              <UploadCloud size={18} /> 파일 변환
-            </button>
-            <button
-              onClick={loadPosts}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded transition"
-            >
-              <RefreshCw size={18} /> 새로고침
-            </button>
-          </div>
+        <div className="flex gap-3">
+          <button
+            onClick={() => setIsLinkModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 transition"
+          >
+            <LinkIcon size={16} /> 링크 소재
+          </button>
+          <button
+            onClick={() => setIsUploadModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 transition"
+          >
+            <UploadCloud size={16} /> 파일 변환
+          </button>
+          <button
+            onClick={loadPosts}
+            className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 text-slate-400 hover:text-white transition"
+          >
+            <RefreshCw size={20} className={loading ? "animate-spin" : ""} />
+          </button>
         </div>
       </div>
 
-      {/* 글 목록 */}
-      <div className="flex-1 overflow-auto bg-white rounded-lg shadow-md border-l-4 border-gray-300">
-        {/* 검색 및 필터 */}
-        <div className="p-4 bg-gray-50 border-b border-gray-200 flex gap-3 items-center">
-          <div className="flex-1 relative">
-            <RefreshCw
-              size={16}
-              className="text-gray-400 absolute left-3 top-1/2"
-            />
-            <input
-              type="text"
-              placeholder="제목 검색..."
-              className="w-full pl-10 pr-4 py-2 bg-white border border-gray-300 rounded focus:outline-blue-500 focus:ring-2 focus:ring-blue-500"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
+      {/* Stats / Quick Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 flex-shrink-0">
+        <div className="bg-slate-800/50 backdrop-blur border border-slate-700 p-5 rounded-2xl flex items-center justify-between">
+          <div>
+            <h3 className="text-sm text-slate-400 font-medium">전체 문서</h3>
+            <p className="text-2xl font-bold text-white mt-1">{posts.length}</p>
+          </div>
+          <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center text-slate-300">
+            <Layers size={20} />
           </div>
         </div>
-
-        {/* 탭 버튼 */}
-        <div className="flex border-b border-gray-200 px-2">
-          <button
-            onClick={() => setActiveTab("draft")}
-            className={`flex-1 py-3 text-sm font-bold transition ${
-              activeTab === "draft"
-                ? "text-blue-600 border-b-2 border-blue-600"
-                : "text-gray-500 hover:text-gray-700 border-b-2 border-transparent hover:border-gray-200"
-            }`}
-          >
-            작성 중 ({posts.filter((p) => !p.isPublished).length})
-          </button>
-          <button
-            onClick={() => setActiveTab("published")}
-            className={`flex-1 py-3 text-sm font-bold transition ${
-              activeTab === "published"
-                ? "text-green-600 border-b-2 border-green-600"
-                : "text-gray-500 hover:text-gray-700 border-b-2 border-transparent hover:border-gray-200"
-            }`}
-          >
-            발행됨 ({posts.filter((p) => p.isPublished).length})
-          </button>
+        <div className="bg-slate-800/50 backdrop-blur border border-slate-700 p-5 rounded-2xl flex items-center justify-between">
+          <div>
+            <h3 className="text-sm text-slate-400 font-medium">발행 완료</h3>
+            <p className="text-2xl font-bold text-green-400 mt-1">
+              {posts.filter((p) => p.isPublished).length}
+            </p>
+          </div>
+          <div className="w-10 h-10 rounded-full bg-green-900/30 flex items-center justify-center text-green-400">
+            <CheckCircle2 size={20} />
+          </div>
         </div>
+        <div className="bg-gradient-to-br from-indigo-900/40 to-purple-900/40 border border-indigo-500/30 p-5 rounded-2xl flex items-center gap-4 relative overflow-hidden">
+          <div className="relative z-10">
+            <h3 className="text-indigo-200 font-bold mb-1 flex items-center gap-2">
+              <Sparkles size={14} /> AI 홈주제 추천
+            </h3>
+            <p className="text-xs text-indigo-300/70">
+              {homeThemes.length > 0
+                ? `${homeThemes.length}개의 주제가 감지되었습니다.`
+                : "발행 시 자동으로 분석됩니다."}
+            </p>
+          </div>
+          <Home
+            size={64}
+            className="absolute -right-4 -bottom-4 text-indigo-500/10"
+          />
+        </div>
+      </div>
 
-        {/* 리스트 */}
-        <div className="flex-1 overflow-y-auto p-2">
-          {loading ? (
-            <div className="text-center py-10 text-gray-500">
-              <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-blue-500"></div>
-              로딩 중...
+      {/* Main Layout: List & Preview */}
+      <div className="flex-1 min-h-0 flex gap-6">
+        {/* Left: List */}
+        <div className="flex-1 bg-slate-800/30 backdrop-blur border border-slate-700 rounded-2xl flex flex-col overflow-hidden">
+          {/* Search & Tabs */}
+          <div className="p-4 border-b border-slate-700 flex flex-col gap-4">
+            <div className="relative">
+              <Search
+                size={16}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+              />
+              <input
+                type="text"
+                placeholder="문서 제목 또는 카테고리 검색..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+              />
             </div>
-          ) : filteredPosts.length === 0 ? (
-            <div className="text-center py-20 text-gray-500">
-              <p className="text-lg mb-2">
-                {searchTerm
-                  ? `"${searchTerm}" 검색 결과가 없습니다.`
-                  : activeTab === "draft"
-                  ? "작성 중인 글이 없습니다."
-                  : "발행된 글이 없습니다."}
-              </p>
+
+            <div className="flex bg-slate-900 rounded-lg p-1 border border-slate-700">
               <button
-                onClick={loadPosts}
-                className="text-blue-600 hover:text-blue-700 font-medium"
+                onClick={() => {
+                  setActiveTab("draft");
+                  setSelectedPost(null);
+                }}
+                className={`flex-1 py-1.5 rounded text-xs font-bold transition-colors ${
+                  activeTab === "draft"
+                    ? "bg-slate-700 text-white shadow"
+                    : "text-slate-500 hover:text-slate-300"
+                }`}
               >
-                <RefreshCw size={20} className="inline-block mr-2" /> 새로고침
+                작성 중 ({posts.filter((p) => !p.isPublished).length})
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab("published");
+                  setSelectedPost(null);
+                }}
+                className={`flex-1 py-1.5 rounded text-xs font-bold transition-colors ${
+                  activeTab === "published"
+                    ? "bg-green-900/40 text-green-400 shadow"
+                    : "text-slate-500 hover:text-slate-300"
+                }`}
+              >
+                발행됨 ({posts.filter((p) => p.isPublished).length})
               </button>
             </div>
-          ) : (
-            <div className="divide-y">
-              {filteredPosts.map((post, idx) => (
-                <div
-                  key={idx}
-                  onClick={() => handlePostClick(post)}
-                  className="group cursor-pointer hover:bg-gray-50 p-3 transition"
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="flex-1 min-w-0">
-                      <h4 className="font-bold text-gray-800 group-hover:text-blue-600 flex items-center justify-between">
-                        {post.name}
+          </div>
+
+          {/* List Content */}
+          <div className="flex-1 overflow-y-auto p-2 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+            {loading ? (
+              <div className="flex flex-col items-center justify-center h-48 text-slate-500">
+                <RefreshCw size={24} className="animate-spin mb-2 opacity-50" />
+                <span>Loading...</span>
+              </div>
+            ) : filteredPosts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 text-slate-500">
+                <FileText size={24} className="mb-2 opacity-30" />
+                <span className="text-sm">문서가 없습니다.</span>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {filteredPosts.map((post, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => handlePostClick(post)}
+                    className={`group p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                      selectedPost?.path === post.path
+                        ? "bg-purple-900/20 border-purple-500/50"
+                        : "bg-slate-800/40 border-slate-700/50 hover:bg-slate-700/50 hover:border-slate-600"
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-1">
                         {post.isPublished && (
-                          <span className="ml-2 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
-                            발행완료
+                          <span className="text-[10px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded border border-green-500/30">
+                            PUB
                           </span>
                         )}
-                      </h4>
-                      <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
-                        <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
+                        <span className="text-[10px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">
                           {post.category}
                         </span>
-                        <span>
-                          {new Date(post.createdAt).toLocaleDateString()}
-                        </span>
+                      </div>
+                      <h4
+                        className={`text-sm font-bold truncate ${
+                          selectedPost?.path === post.path
+                            ? "text-white"
+                            : "text-slate-300 group-hover:text-white"
+                        }`}
+                      >
+                        {post.name}
+                      </h4>
+                      <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-1">
+                        <Calendar size={10} />
+                        {new Date(post.createdAt).toLocaleDateString()}
                       </div>
                     </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
 
-      {/* 상세 보기 (선택된 게시글) */}
-      {selectedPost && (
-        <div className="mt-6 bg-white rounded-lg shadow-md border-l-4 border-gray-200 p-6">
-          <div className="flex items-center justify-between mb-4 border-b border-gray-200 pb-2">
-            <div className="flex items-center gap-2">
-              <HomeIcon size={24} className="text-blue-500" />
-              <div className="flex flex-col">
-                <h3 className="text-xl font-bold text-gray-900">
+                    <button
+                      onClick={(e) => handleDelete(post.path, e)}
+                      className="p-2 text-slate-600 hover:text-red-400 hover:bg-slate-700 rounded transition opacity-0 group-hover:opacity-100"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right: Preview (Conditional) */}
+        {selectedPost ? (
+          <div className="w-[45%] bg-white rounded-2xl border border-slate-700 flex flex-col overflow-hidden animate-in slide-in-from-right-10 duration-200">
+            <div className="bg-slate-50 border-b border-slate-200 p-4 flex justify-between items-start">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="bg-purple-100 text-purple-700 text-[10px] font-bold px-2 py-0.5 rounded">
+                    {selectedPost.category}
+                  </span>
+                </div>
+                <h2 className="text-gray-900 font-bold text-lg leading-tight">
                   {selectedPost.name}
-                </h3>
-                <p className="text-sm text-gray-500">
-                  {selectedPost.category} ·{" "}
-                  {new Date(selectedPost.createdAt).toLocaleDateString()}
-                </p>
+                </h2>
+              </div>
+              <button
+                onClick={() => setSelectedPost(null)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 bg-white">
+              <div className="prose prose-sm max-w-none text-slate-800">
+                <div className="whitespace-pre-wrap font-sans">
+                  {selectedPost.content}
+                </div>
               </div>
             </div>
-            <button
-              onClick={() => setSelectedPost(null)}
-              className="text-gray-400 hover:text-gray-600"
-            >
-              닫기 ×
-            </button>
-          </div>
+            {/* Images Section */}
+            <div className="p-4 bg-gray-50 border-t border-slate-200 flex flex-col gap-3">
+              <div className="flex justify-between items-center">
+                <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                  <ImageIcon size={16} /> Attached Images
+                </h3>
+                <label className="cursor-pointer text-xs bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1.5 rounded-md transition flex items-center gap-1">
+                  <UploadCloud size={12} /> Add Image
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept="image/*"
+                    multiple
+                    onChange={async (e) => {
+                      if (
+                        e.target.files &&
+                        e.target.files.length > 0 &&
+                        selectedPost
+                      ) {
+                        const api = window.electronAPI as any;
+                        if (api?.uploadPostImage) {
+                          const files = Array.from(e.target.files);
+                          for (const file of files) {
+                            const fileObj = file as any;
+                            try {
+                              const filePath = api.getFilePath
+                                ? api.getFilePath(fileObj)
+                                : fileObj.path;
+                              await api.uploadPostImage(
+                                selectedPost.path,
+                                filePath
+                              );
+                            } catch (err) {
+                              console.error(err);
+                            }
+                          }
+                          showSuccess("Images uploaded");
+                          loadPostImages(selectedPost.path);
+                        }
+                      }
+                    }}
+                  />
+                </label>
+              </div>
 
-          {/* 본문 미리보기 */}
-          <div className="bg-gray-50 rounded-lg p-4 mb-4">
-            <h4 className="text-sm font-bold text-gray-700 mb-2">
-              본문 미리보기
-            </h4>
-            <div className="max-h-64 overflow-y-auto">
-              <p className="text-sm text-gray-600 whitespace-pre-wrap break-words">
-                {selectedPost.content}
-              </p>
+              <div className="flex gap-2 overflow-x-auto pb-2 min-h-[80px]">
+                {postImages.length === 0 ? (
+                  <div className="w-full text-center text-xs text-gray-400 py-4 border-2 border-dashed border-gray-200 rounded-lg">
+                    No images attached. Drag & drop or upload content related
+                    images here.
+                  </div>
+                ) : (
+                  postImages.map((img, idx) => (
+                    <div
+                      key={idx}
+                      className="relative group min-w-[80px] w-20 h-20 rounded-md overflow-hidden border border-gray-200 bg-white"
+                    >
+                      <img
+                        src={`file://${img.path}`}
+                        alt={img.name}
+                        className="w-full h-full object-cover"
+                      />
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (confirm("Delete this image?")) {
+                            await (window.electronAPI as any).deletePostImage(
+                              selectedPost.path,
+                              img.name
+                            );
+                            loadPostImages(selectedPost.path);
+                          }
+                        }}
+                        className="absolute top-1 right-1 bg-red-500/80 hover:bg-red-600 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition"
+                      >
+                        <Trash2 size={10} />
+                      </button>
+                      {/* Keyword Tooltip */}
+                      {img.keywords && img.keywords.length > 0 && (
+                        <div className="absolute bottom-0 left-0 w-full bg-black/60 text-[8px] text-white p-0.5 truncate text-center">
+                          {img.keywords[0]}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="px-4 pb-2 bg-gray-50 flex justify-end">
+              <span className="text-xs text-gray-400 flex items-center">
+                <Eye size={12} className="mr-1" /> Preview Mode
+              </span>
             </div>
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="w-[45%] bg-slate-800/20 border border-slate-700/50 rounded-2xl flex flex-col items-center justify-center text-slate-600 border-dashed">
+            <FileText size={48} className="mb-4 opacity-20" />
+            <p>문서를 선택하여 내용을 미리보세요.</p>
+          </div>
+        )}
+      </div>
 
-      {/* 모달들 */}
+      {/* Modals */}
       <FileUploadModal
         isOpen={isUploadModalOpen}
         onClose={() => setIsUploadModalOpen(false)}

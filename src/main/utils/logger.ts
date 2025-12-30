@@ -45,10 +45,31 @@ export const logger = winston.createLogger({
   ],
 });
 
-// 렌더러 프로세스로 로그 전송을 위한 헬퍼 (IPC 연동 예정)
+/**
+ * @description UI Toast 메시지 페이로드 타입
+ */
+export type UiToastPayload = {
+  type: "success" | "error" | "warning" | "info";
+  title: string;
+  message?: string;
+};
+
+// 렌더러 프로세스로 로그 전송을 위한 헬퍼 (IPC 채널 예정)
 export const sendLogToRenderer = (window: any, message: string) => {
   logger.info(message);
   if (window && !window.isDestroyed()) {
     window.webContents.send("log-message", `[SYSTEM] ${message}`);
+  }
+};
+
+/**
+ * @description UI Toast 메시지를 Renderer로 전송
+ */
+export const sendToastToRenderer = (
+  window: any,
+  payload: UiToastPayload
+): void => {
+  if (window && !window.isDestroyed()) {
+    window.webContents.send("ui-toast", payload);
   }
 };

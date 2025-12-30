@@ -2,7 +2,12 @@ import Store from "electron-store";
 import { v4 as uuidv4 } from "uuid";
 import { logger } from "../utils/logger";
 
-export type JobStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+export type JobStatus =
+  | "PENDING"
+  | "PROCESSING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
 export type JobType = "PUBLISH_RSS" | "PUBLISH_MATERIAL";
 
 export interface Job {

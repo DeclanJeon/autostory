@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { Link, Folder, Plus, Rocket, X, Loader2 } from "lucide-react";
 
 interface LinkInputModalProps {
   isOpen: boolean;
@@ -16,23 +17,18 @@ const LinkInputModal: React.FC<LinkInputModalProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
 
   const handleSubmit = async () => {
-    if (!url) {
-      alert("URL을 입력해주세요.");
-      return;
-    }
-
+    if (!url) return alert("URL을 입력해주세요.");
     setIsProcessing(true);
     try {
       const result = await window.electronAPI.processLinkAndGenerate({
         url,
         category,
       });
-
       if (result.success) {
         alert("글 생성이 완료되었습니다!");
         onSuccess();
         onClose();
-        setUrl(""); // Reset URL
+        setUrl("");
       } else {
         alert(`오류: ${result.error}`);
       }
@@ -43,21 +39,15 @@ const LinkInputModal: React.FC<LinkInputModalProps> = ({
     }
   };
 
-  // [신규] 리스트에 저장 핸들러
   const handleAddToList = async () => {
-    if (!url) {
-      alert("URL을 입력해주세요.");
-      return;
-    }
-
+    if (!url) return alert("URL을 입력해주세요.");
     try {
       const result = await window.electronAPI.addMaterial({
         type: "link",
         value: url,
-        title: url, // 임시 제목
+        title: url,
         category,
       });
-
       if (result.success) {
         alert("✅ 소재 리스트에 저장되었습니다.");
         onClose();
@@ -73,72 +63,102 @@ const LinkInputModal: React.FC<LinkInputModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-xl">
-        <h3 className="text-xl font-bold mb-4">🔗 링크 기반 글 생성</h3>
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+        <div className="flex justify-between items-center p-6 border-b border-slate-800">
+          <h3 className="text-xl font-bold text-white flex items-center gap-2">
+            <Link size={24} className="text-blue-500" />
+            Link to Post
+          </h3>
+          <button
+            onClick={onClose}
+            disabled={isProcessing}
+            className="text-slate-500 hover:text-white transition"
+          >
+            <X size={24} />
+          </button>
+        </div>
 
-        <div className="space-y-4">
+        <div className="p-6 space-y-5">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              URL (기사, 블로그, 뉴스 등)
+            <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">
+              URL Source
             </label>
-            <input
-              type="text"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              className="w-full border rounded px-3 py-2 focus:outline-blue-500"
-              placeholder="https://example.com/article"
-              disabled={isProcessing}
-            />
+            <div className="relative">
+              <Link
+                size={16}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+              />
+              <input
+                type="text"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-10 pr-3 py-3 text-white focus:border-blue-500 outline-none"
+                placeholder="https://example.com/article"
+                disabled={isProcessing}
+              />
+            </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              카테고리
+            <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">
+              Category
             </label>
-            <input
-              type="text"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full border rounded px-3 py-2 focus:outline-blue-500"
-              disabled={isProcessing}
-            />
+            <div className="relative">
+              <Folder
+                size={16}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+              />
+              <input
+                type="text"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-10 pr-3 py-3 text-white focus:border-blue-500 outline-none"
+                disabled={isProcessing}
+              />
+            </div>
           </div>
 
           {isProcessing && (
-            <div className="text-sm text-blue-600 animate-pulse">
-              AI가 링크 내용을 분석하고 글을 작성 중입니다... (약 15-30초 소요)
+            <div className="flex items-center gap-3 p-3 bg-blue-900/20 border border-blue-900/50 rounded-lg text-blue-400 text-sm animate-pulse">
+              <Loader2 size={16} className="animate-spin" />
+              Processing contents with AI... (approx. 15-30s)
             </div>
           )}
         </div>
 
-        <div className="mt-6 flex justify-end gap-2">
+        <div className="p-6 border-t border-slate-800 flex justify-end gap-3 bg-slate-900/50">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
             disabled={isProcessing}
+            className="px-4 py-2 text-slate-400 hover:text-white text-sm font-bold"
           >
-            취소
+            Cancel
           </button>
 
-          {/* [신규] 리스트에 저장 버튼 */}
           <button
             onClick={handleAddToList}
-            className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 font-bold"
             disabled={isProcessing}
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold border border-slate-700 transition flex items-center gap-2"
           >
-            📥 나중에 발행 (저장)
+            <Plus size={16} /> Save for Later
           </button>
 
-          {/* 기존 즉시 생성 버튼 */}
           <button
             onClick={handleSubmit}
-            className={`px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-bold ${
-              isProcessing ? "opacity-50 cursor-not-allowed" : ""
-            }`}
             disabled={isProcessing}
+            className={`px-6 py-2 rounded-xl font-bold text-white shadow-lg flex items-center gap-2 transition ${
+              isProcessing
+                ? "bg-slate-700 cursor-not-allowed"
+                : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500"
+            }`}
           >
-            {isProcessing ? "생성 중..." : "🚀 바로 생성"}
+            {isProcessing ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Rocket size={16} />
+            )}
+            Generate Now
           </button>
         </div>
       </div>

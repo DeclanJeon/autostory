@@ -60,7 +60,6 @@ export class RssService {
         cacheAge < ONE_HOUR
       ) {
         logger.info(`RSS 캐시 사용: ${cache.items.length}개 항목`);
-        // [FIX] 캐시된 아이템이라도 발행 여부는 최신 상태로 업데이트해서 반환
         return cache.items.map((item) => ({
           ...item,
           isPublished: isLinkPublished(item.link),
@@ -71,51 +70,63 @@ export class RssService {
     const urls = store.get("settings").rssUrls || [];
     if (urls.length === 0) return [];
 
-    logger.info(`RSS 수집 시작: ${urls.length}개의 소스`);
+    logger.info(`RSS 수집 시작: ${urls.length}개의 소스 (순차 처리)`);
 
-    // [NEW] 각 피드 요청에 개별 타임아웃 적용
-    const feedPromises = urls.map(async (url) => {
+    const allItems: FeedItem[] = [];
+    let successCount = 0;
+    let failCount = 0;
+    const failedUrls: string[] = [];
+
+    // [CHANGED] 순차 처리로 변경 (서버 및 로컬 부하 감소)
+    for (const url of urls) {
       try {
         const feedPromise = this.parser.parseURL(url);
-        const feed = await this.fetchWithTimeout(
-          feedPromise,
-          this.FEED_TIMEOUT
-        );
+        // 타임아웃 10초로 단축
+        const feed = await this.fetchWithTimeout(feedPromise, 10000);
 
-        const items = feed.items.map((item) => ({
-          title: item.title || "No Title",
-          link: item.link || "",
-          pubDate: item.pubDate || "",
-          contentSnippet: item.contentSnippet?.slice(0, 150) + "..." || "",
-          source: feed.title || "Unknown Source",
-          isoDate: item.isoDate || new Date().toISOString(),
-          // [NEW] 스토어에서 발행 여부 확인
-          isPublished: isLinkPublished(item.link || ""),
-        }));
-        return items;
+        if (feed && feed.items) {
+          const items = feed.items.map((item) => ({
+            title: item.title || "No Title",
+            link: item.link || "",
+            pubDate: item.pubDate || "",
+            contentSnippet: item.contentSnippet?.slice(0, 150) + "..." || "",
+            source: feed.title || "Unknown Source",
+            isoDate: item.isoDate || new Date().toISOString(),
+            isPublished: isLinkPublished(item.link || ""),
+          }));
+          allItems.push(...items);
+          successCount++;
+        }
+
+        // 부하 방지를 위한 미세 딜레이
+        await new Promise((resolve) => setTimeout(resolve, 200));
       } catch (error) {
-        logger.error(
-          `RSS 파싱 실패 (${url}): ${
-            error instanceof Error ? error.message : error
-          }`
-        );
-        return []; // [NEW] 실패 시 빈 배열 반환하여 계속 진행
+        failCount++;
+        // [IMPROVED] 개별 에러는 로그에 남기되 ERROR 레벨이 아닌 경고로 처리하거나 요약
+        const msg = error instanceof Error ? error.message : String(error);
+        failedUrls.push(`${url} (${msg})`);
       }
-    });
+    }
 
-    // [NEW] 모든 요청 완료 대기 (타임아웃된 것들은 빈 배열로 처리됨)
-    const results = await Promise.all(feedPromises);
-    const allItems = results.flat().sort((a, b) => {
+    // 결과 요약 로깅
+    if (failCount > 0) {
+      logger.warn(`RSS 수집 완료: 성공 ${successCount}, 실패 ${failCount}`);
+      // 실패 내역은 디버그 레벨이나 UI에 영향을 덜 주는 방식으로 로깅
+      // logger.debug(`실패한 RSS: ${failedUrls.join(", ")}`);
+    } else {
+      logger.info(`RSS 수집 완료: ${allItems.length}개 항목 (모두 성공)`);
+    }
+
+    const sortedItems = allItems.sort((a, b) => {
       return new Date(b.isoDate).getTime() - new Date(a.isoDate).getTime();
     });
 
     store.set("feedCache", {
-      items: allItems,
+      items: sortedItems,
       lastUpdated: Date.now(),
     });
 
-    logger.info(`RSS 수집 완료: ${allItems.length}개 항목`);
-    return allItems;
+    return sortedItems;
   }
 
   public filterByPeriod(items: FeedItem[], days: number): FeedItem[] {

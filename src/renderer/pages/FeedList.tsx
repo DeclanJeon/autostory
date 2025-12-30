@@ -3,6 +3,21 @@ import { useNavigate } from "react-router-dom";
 import { useDraftStore } from "../stores/draftStore";
 import { useFeedStore } from "../stores/feedStore";
 import type { MaterialItem } from "../types/global";
+import {
+  Rss,
+  Search,
+  RotateCw,
+  Clock,
+  ExternalLink,
+  Trash2,
+  FileText,
+  Filter,
+  Check,
+  Calendar,
+  Layers,
+  Sparkles,
+  Send,
+} from "lucide-react";
 
 const FeedList: React.FC = () => {
   // UI State
@@ -10,7 +25,7 @@ const FeedList: React.FC = () => {
   const [savedMaterials, setSavedMaterials] = useState<MaterialItem[]>([]);
   const [loadingMaterials, setLoadingMaterials] = useState(false);
 
-  // Filter State (로컬에서 즉시 필터링)
+  // Filter State
   const [days, setDays] = useState(3);
   const [selectedSource, setSelectedSource] = useState("All");
   const [searchTerm, setSearchTerm] = useState("");
@@ -20,7 +35,6 @@ const FeedList: React.FC = () => {
   const navigate = useNavigate();
   const { setSelectedIssues } = useDraftStore();
 
-  // [OPTIMIZATION 1] Global Store 구독
   const {
     feeds,
     isLoading: loadingFeeds,
@@ -28,16 +42,14 @@ const FeedList: React.FC = () => {
     lastUpdated,
   } = useFeedStore();
 
-  // [OPTIMIZATION 2] 초기 진입 시 캐시 확인 후 필요하면 로드
   useEffect(() => {
     if (activeTab === "rss") {
-      fetchFeeds(false); // 캐시 있으면 IPC 호출 안 함
+      fetchFeeds(false);
     } else {
       loadSavedMaterials();
     }
   }, [activeTab]);
 
-  // Saved Materials 로딩 (기존 방식 유지)
   const loadSavedMaterials = async () => {
     if (!window.electronAPI) return;
     setLoadingMaterials(true);
@@ -51,18 +63,13 @@ const FeedList: React.FC = () => {
     }
   };
 
-  // [OPTIMIZATION 3] 클라이언트 사이드 필터링 (useMemo)
   const filteredFeeds = useMemo(() => {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - days);
 
     return feeds.filter((item) => {
       const itemDate = new Date(item.isoDate);
-
-      // 1. 날짜 조건
       if (itemDate < cutoffDate) return false;
-
-      // 2. 검색어 조건
       if (
         searchTerm &&
         !item.title.toLowerCase().includes(searchTerm.toLowerCase()) &&
@@ -70,25 +77,19 @@ const FeedList: React.FC = () => {
       ) {
         return false;
       }
-
-      // 3. 소스 조건
       if (selectedSource !== "All" && item.source !== selectedSource)
         return false;
-
-      // 4. 발행 여부 조건
       if (hidePublished && item.isPublished) return false;
-
       return true;
     });
   }, [feeds, days, searchTerm, selectedSource, hidePublished]);
 
-  // Source 목록 추출 (Memoization)
   const sources = useMemo(() => {
     return ["All", ...Array.from(new Set(feeds.map((i) => i.source)))];
   }, [feeds]);
 
   const handleRefresh = () => {
-    fetchFeeds(true); // 강제 새로고침
+    fetchFeeds(true);
   };
 
   const toggleSelection = (link: string) => {
@@ -104,7 +105,6 @@ const FeedList: React.FC = () => {
       alert("선택된 항목이 없습니다.");
       return;
     }
-    // Draft Store 호환 매핑
     const draftIssues = selectedData.map((item) => ({
       ...item,
       description: item.contentSnippet,
@@ -158,238 +158,330 @@ const FeedList: React.FC = () => {
   };
 
   return (
-    <div className="p-6 bg-gray-100 h-full flex flex-col text-slate-800">
-      <div className="flex justify-between items-center mb-6 gap-4">
-        <h2 className="text-2xl font-bold flex items-center gap-2 whitespace-nowrap">
-          {activeTab === "rss" ? "RSS 피드" : "저장된 자료"}
-          {activeTab === "rss" && (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleRefresh}
-                className={`text-sm bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 rounded transition flex items-center gap-1 ${
-                  loadingFeeds ? "animate-pulse" : ""
-                }`}
-                title="새로고침 (RSS 다시 불러오기)"
-                disabled={loadingFeeds}
-              >
-                🔄 {loadingFeeds ? "로딩 중..." : "새로고침"}
-              </button>
-              {lastUpdated > 0 && !loadingFeeds && (
-                <span className="text-xs text-gray-400 font-normal">
-                  {new Date(lastUpdated).toLocaleTimeString()} 업데이트됨
-                </span>
-              )}
-            </div>
-          )}
-        </h2>
+    <div className="flex flex-col h-full bg-slate-900 text-slate-100 p-8 gap-6 overflow-hidden">
+      {/* Header Area */}
+      <div className="flex flex-col gap-4 flex-shrink-0">
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-400 flex items-center gap-3">
+              <Rss size={28} className="text-blue-500" />
+              Content Feeds
+            </h1>
+            <p className="text-slate-400 text-sm mt-1">
+              RSS 피드를 관리하고 포스팅 소재를 선택하세요.
+            </p>
+          </div>
 
-        <div className="flex gap-2 flex-1 justify-end items-center">
-          {/* 발행된 글 숨기기 */}
+          <div className="flex bg-slate-800 p-1 rounded-lg border border-slate-700">
+            <button
+              onClick={() => {
+                setActiveTab("rss");
+                setSelectedItems(new Set());
+              }}
+              className={`px-6 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${
+                activeTab === "rss"
+                  ? "bg-blue-600 text-white shadow-lg"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              <Rss size={16} /> RSS 피드
+              <span className="bg-slate-900/50 px-2 py-0.5 rounded text-xs ml-1">
+                {feeds.length}
+              </span>
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab("saved");
+                setSelectedItems(new Set());
+              }}
+              className={`px-6 py-2 rounded-md text-sm font-bold transition-all flex items-center gap-2 ${
+                activeTab === "saved"
+                  ? "bg-purple-600 text-white shadow-lg"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              <Layers size={16} /> 저장된 소재
+              <span className="bg-slate-900/50 px-2 py-0.5 rounded text-xs ml-1">
+                {savedMaterials.length}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Toolbar */}
+        <div className="bg-slate-800/50 border border-slate-700 p-4 rounded-xl flex flex-wrap items-center gap-4 shadow-sm backdrop-blur-md">
+          {/* Refresh Button (RSS) */}
           {activeTab === "rss" && (
-            <label className="flex items-center gap-2 mr-2 text-sm text-gray-600 cursor-pointer select-none whitespace-nowrap">
-              <input
-                type="checkbox"
-                checked={hidePublished}
-                onChange={(e) => setHidePublished(e.target.checked)}
-                className="rounded text-blue-600 focus:ring-blue-500"
+            <button
+              onClick={handleRefresh}
+              className={`p-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg border border-slate-600 transition flex items-center gap-2 ${
+                loadingFeeds ? "animate-pulse" : ""
+              }`}
+              disabled={loadingFeeds}
+            >
+              <RotateCw
+                size={16}
+                className={loadingFeeds ? "animate-spin" : ""}
               />
-              발행된 글 숨기기
+              {loadingFeeds ? "갱신 중..." : "새로고침"}
+            </button>
+          )}
+
+          {/* View Toggle */}
+          {activeTab === "rss" && (
+            <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer select-none px-3 border-r border-slate-700">
+              <div
+                className={`w-10 h-5 rounded-full p-1 transition-colors ${
+                  hidePublished ? "bg-blue-600" : "bg-slate-600"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="hidden"
+                  checked={hidePublished}
+                  onChange={(e) => setHidePublished(e.target.checked)}
+                />
+                <div
+                  className={`w-3 h-3 bg-white rounded-full shadow-sm transition-transform ${
+                    hidePublished ? "translate-x-5" : "translate-x-0"
+                  }`}
+                ></div>
+              </div>
+              <span>발행됨 숨기기</span>
             </label>
           )}
 
-          {/* 검색어 */}
-          <input
-            type="text"
-            placeholder="검색어 입력..."
-            className="bg-white border px-3 py-2 rounded shadow text-sm focus:outline-blue-500 w-48"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-
-          {/* 소스 필터 */}
-          <select
-            className="bg-white border px-3 py-2 rounded shadow text-sm font-medium focus:outline-none max-w-[150px]"
-            value={selectedSource}
-            onChange={(e) => setSelectedSource(e.target.value)}
-          >
-            {sources.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-
-          {/* 날짜 필터 (클라이언트 사이드) */}
-          <div className="flex bg-white rounded shadow overflow-hidden whitespace-nowrap">
-            {[1, 3, 7, 30].map((d) => (
-              <button
-                key={d}
-                onClick={() => setDays(d)}
-                className={`px-3 py-2 text-sm font-medium ${
-                  days === d
-                    ? "bg-blue-600 text-white"
-                    : "hover:bg-gray-100 text-gray-700"
-                }`}
-              >
-                {d === 30 ? "30일" : `${d}일`}
-              </button>
-            ))}
+          {/* Search */}
+          <div className="flex-1 relative group">
+            <Search
+              size={16}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-400 transition-colors"
+            />
+            <input
+              type="text"
+              placeholder={
+                activeTab === "rss"
+                  ? "피드 검색 (제목, 내용, 태그...)"
+                  : "소재 검색..."
+              }
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-10 pr-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 transition-colors"
+            />
           </div>
+
+          {/* Filters */}
+          {activeTab === "rss" && (
+            <>
+              <div className="relative">
+                <Filter
+                  size={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+                />
+                <select
+                  value={selectedSource}
+                  onChange={(e) => setSelectedSource(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 rounded-lg pl-10 pr-8 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 appearance-none"
+                >
+                  {sources.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex bg-slate-900 rounded-lg border border-slate-700 p-1">
+                {[1, 3, 7, 30].map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => setDays(d)}
+                    className={`px-3 py-1 rounded text-xs font-bold transition-colors ${
+                      days === d
+                        ? "bg-blue-600 text-white"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    {d === 30 ? "30일" : `${d}일`}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
-      {/* 탭 버튼 */}
-      <div className="flex gap-4 mb-4 border-b border-gray-300">
-        <button
-          onClick={() => {
-            setActiveTab("rss");
-            setSelectedItems(new Set());
-          }}
-          className={`pb-2 border-b-2 font-bold ${
-            activeTab === "rss"
-              ? "border-blue-500 text-blue-600"
-              : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          RSS 피드 ({feeds.length > 0 ? filteredFeeds.length : 0})
-        </button>
-        <button
-          onClick={() => {
-            setActiveTab("saved");
-            setSelectedItems(new Set());
-          }}
-          className={`pb-2 border-b-2 font-bold ${
-            activeTab === "saved"
-              ? "border-purple-500 text-purple-600"
-              : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          저장된 자료 ({savedMaterials.length})
-        </button>
-      </div>
-
-      {/* 리스트 영역 */}
-      <div className="flex-1 overflow-y-auto pr-2">
+      {/* Main Content Area */}
+      <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent -mr-2 pr-2">
         {activeTab === "rss" ? (
           loadingFeeds && feeds.length === 0 ? (
-            <div className="text-center py-20 text-gray-500">
-              RSS 피드 가져오는 중... <br />
+            <div className="flex flex-col items-center justify-center h-full text-slate-500">
+              <RotateCw size={48} className="animate-spin mb-4 opacity-50" />
+              <p>RSS 피드를 동기화하고 있습니다...</p>
             </div>
           ) : filteredFeeds.length === 0 ? (
-            <div className="text-center py-20 text-gray-500">
-              표시할 항목이 없습니다. 필터를 조정하거나 RSS를 추가하세요.
+            <div className="flex flex-col items-center justify-center h-full text-slate-500">
+              <FileText size={48} className="mb-4 opacity-50" />
+              <p>표시할 피드가 없습니다. 필터를 조정해 보세요.</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-20">
               {filteredFeeds.map((item, idx) => {
                 const isSelected = selectedItems.has(item.link);
                 const isPublished = item.isPublished;
+
                 return (
                   <div
                     key={`${item.link}-${idx}`}
                     onClick={() => !isPublished && toggleSelection(item.link)}
-                    className={`p-4 rounded-lg shadow transition border-2 relative overflow-hidden ${
+                    className={`group relative flex flex-col p-5 rounded-2xl border transition-all duration-200 ${
                       isPublished
-                        ? "bg-gray-100 border-gray-200 cursor-not-allowed opacity-70"
+                        ? "bg-slate-800/20 border-slate-800 opacity-50 cursor-not-allowed grayscale"
                         : isSelected
-                        ? "border-blue-500 bg-blue-50 cursor-pointer"
-                        : "border-white bg-white hover:border-blue-200 cursor-pointer"
+                        ? "bg-blue-900/20 border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.15)] cursor-pointer"
+                        : "bg-slate-800/40 border-slate-700/50 hover:bg-slate-800 hover:border-slate-600 hover:shadow-lg cursor-pointer"
                     }`}
                   >
-                    {isPublished && (
-                      <div className="absolute top-0 right-0 bg-green-500 text-white text-xs px-2 py-1 rounded-bl-lg font-bold z-10">
-                        발행됨
+                    <div className="flex justify-between items-start mb-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                            isPublished
+                              ? "bg-slate-800 text-slate-500 border-slate-700"
+                              : "bg-blue-900/30 text-blue-300 border-blue-800/50"
+                          }`}
+                        >
+                          {item.source}
+                        </span>
+                        <span className="text-xs text-slate-500 flex items-center gap-1">
+                          <Clock size={10} />
+                          {new Date(item.isoDate).toLocaleDateString()}
+                        </span>
                       </div>
-                    )}
-
-                    <div className="flex justify-between items-start mb-2">
-                      <span
+                      <button
                         onClick={(e) => {
                           e.stopPropagation();
                           window.open(item.link, "_blank");
                         }}
-                        title="원문 보기"
-                        className={`text-xs font-bold px-2 py-1 rounded cursor-pointer transition-colors ${
-                          isPublished
-                            ? "bg-gray-200 text-gray-500"
-                            : "text-blue-600 bg-blue-100 hover:bg-blue-200"
-                        }`}
+                        className="text-slate-500 hover:text-white transition-colors p-1 rounded hover:bg-slate-700"
                       >
-                        {item.source} 🔗
-                      </span>
-                      <span className="text-xs text-gray-400">
-                        {new Date(item.isoDate).toLocaleString()}
-                      </span>
+                        <ExternalLink size={14} />
+                      </button>
                     </div>
+
                     <h3
-                      className={`text-lg font-bold mb-2 ${
+                      className={`font-bold text-lg mb-2 leading-snug line-clamp-2 ${
                         isPublished
-                          ? "text-gray-500 line-through"
-                          : "text-gray-800"
+                          ? "text-slate-500 line-through"
+                          : isSelected
+                          ? "text-blue-100"
+                          : "text-slate-200 group-hover:text-white"
                       }`}
                     >
                       {item.title}
                     </h3>
-                    <p className="text-sm text-gray-600 line-clamp-2">
+
+                    <p className="text-sm text-slate-400 line-clamp-3 mb-4 flex-1">
                       {item.contentSnippet}
                     </p>
+
+                    {/* Status / Checkbox */}
+                    <div className="flex justify-between items-center mt-auto pt-3 border-t border-slate-700/50">
+                      {isPublished ? (
+                        <span className="text-xs font-bold text-green-500 flex items-center gap-1">
+                          <Check size={12} /> 발행 완료
+                        </span>
+                      ) : (
+                        <div
+                          className={`flex items-center gap-2 text-xs font-medium transition-colors ${
+                            isSelected
+                              ? "text-blue-400"
+                              : "text-slate-500 group-hover:text-slate-300"
+                          }`}
+                        >
+                          <div
+                            className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${
+                              isSelected
+                                ? "bg-blue-500 border-blue-500"
+                                : "border-slate-600 group-hover:border-slate-500"
+                            }`}
+                          >
+                            {isSelected && (
+                              <Check
+                                size={10}
+                                className="text-white"
+                                strokeWidth={3}
+                              />
+                            )}
+                          </div>
+                          {isSelected ? "선택됨" : "클릭하여 선택"}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })}
             </div>
           )
-        ) : loadingMaterials ? (
-          <div className="text-center py-20 text-gray-500">로딩 중...</div>
-        ) : savedMaterials.length === 0 ? (
-          <div className="text-center py-20 text-gray-500">
-            저장된 자료가 없습니다.
+        ) : // Saved Materials View
+        savedMaterials.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-slate-500">
+            <Layers size={48} className="mb-4 opacity-50" />
+            <p>저장된 소재가 없습니다.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-20">
             {savedMaterials.map((item) => {
               const isSelected = selectedItems.has(item.id);
               return (
                 <div
                   key={item.id}
                   onClick={() => toggleSelection(item.id)}
-                  className={`p-4 rounded-lg shadow cursor-pointer transition border-2 ${
+                  className={`group relative p-5 rounded-2xl border transition-all duration-200 cursor-pointer ${
                     isSelected
-                      ? "border-purple-500 bg-purple-50"
-                      : "border-white bg-white hover:border-purple-200"
+                      ? "bg-purple-900/20 border-purple-500 shadow-[0_0_20px_rgba(168,85,247,0.15)]"
+                      : "bg-slate-800/40 border-slate-700/50 hover:bg-slate-800 hover:border-slate-600"
                   }`}
                 >
-                  <div className="flex justify-between items-start mb-2">
+                  <div className="flex justify-between items-start mb-3">
                     <span
-                      className={`text-xs font-bold px-2 py-1 rounded ${
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded border flex items-center gap-1 ${
                         item.type === "link"
-                          ? "bg-blue-100 text-blue-700"
+                          ? "bg-cyan-900/30 text-cyan-300 border-cyan-800/50"
                           : item.type === "file"
-                          ? "bg-green-100 text-green-700"
-                          : "bg-gray-100 text-gray-700"
+                          ? "bg-emerald-900/30 text-emerald-300 border-emerald-800/50"
+                          : "bg-indigo-900/30 text-indigo-300 border-indigo-800/50"
                       }`}
                     >
                       {item.type.toUpperCase()}
                     </span>
-                    <div className="flex gap-2 items-center">
-                      <span className="text-xs text-gray-400">
-                        {new Date(item.addedAt).toLocaleString()}
+                    <div className="flex gap-2">
+                      <span className="text-xs text-slate-500 flex items-center gap-1">
+                        <Calendar size={10} />
+                        {new Date(item.addedAt).toLocaleDateString()}
                       </span>
                       <button
                         onClick={(e) => handleMaterialDelete(item.id, e)}
-                        className="text-red-400 hover:text-red-600 p-1"
+                        className="text-slate-500 hover:text-red-400 transition"
                       >
-                        🗑️
+                        <Trash2 size={14} />
                       </button>
                     </div>
                   </div>
-                  <h3 className="text-lg font-bold text-gray-800 mb-2">
+
+                  <h3
+                    className={`font-bold text-lg mb-2 truncate ${
+                      isSelected ? "text-purple-100" : "text-slate-200"
+                    }`}
+                  >
                     {item.title}
                   </h3>
-                  <p className="text-sm text-gray-600 truncate mb-1">
+                  <p className="text-sm text-slate-400 truncate mb-2">
                     {item.value}
                   </p>
+
                   {item.category && (
-                    <span className="inline-block text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded">
+                    <span className="inline-block text-xs bg-slate-700/50 text-slate-300 px-2 py-0.5 rounded border border-slate-600">
                       {item.category}
                     </span>
                   )}
@@ -400,25 +492,34 @@ const FeedList: React.FC = () => {
         )}
       </div>
 
-      {/* 하단 플로팅 버튼 */}
+      {/* Floating Action Bar */}
       {selectedItems.size > 0 && (
-        <div className="fixed bottom-6 right-6 left-72 bg-gray-800 text-white p-4 rounded-lg shadow-xl flex justify-between items-center animate-slide-up z-50">
-          <span className="font-bold text-lg">
-            {selectedItems.size}개 선택됨
-          </span>
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-slate-800/90 backdrop-blur-md text-white px-6 py-4 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-8 animate-in slide-in-from-bottom-5 z-20 w-fit min-w-[300px] justify-between">
+          <div className="flex flex-col">
+            <span className="text-xs text-slate-400">Selected Items</span>
+            <span className="font-bold text-xl flex items-center gap-2">
+              {selectedItems.size}{" "}
+              <span className="text-sm font-normal text-slate-400">
+                개 선택됨
+              </span>
+            </span>
+          </div>
+
           {activeTab === "rss" ? (
             <button
               onClick={handleCreateDraft}
-              className="bg-green-500 hover:bg-green-600 text-white px-6 py-2 rounded font-bold shadow transition"
+              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white px-6 py-3 rounded-xl font-bold shadow-lg transition-transform hover:scale-105 flex items-center gap-2"
             >
+              <Sparkles size={18} />
               AI 초안 생성
             </button>
           ) : (
             <button
               onClick={handleBatchPublish}
-              className="bg-purple-500 hover:bg-purple-600 text-white px-6 py-2 rounded font-bold shadow transition"
+              className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white px-6 py-3 rounded-xl font-bold shadow-lg transition-transform hover:scale-105 flex items-center gap-2"
             >
-              일괄 발행 큐 등록
+              <Send size={18} />
+              일괄 발행 (큐)
             </button>
           )}
         </div>
